@@ -19,7 +19,7 @@ transducer_recog_am_args = {
 }
 
 
-def get_transducer_train_args(**kwargs) -> Dict:
+def get_transducer_train_step_args(**kwargs) -> Dict:
     default_args = {
         "time_rqmt": 168,
         "mem_rqmt": 16,
@@ -28,17 +28,17 @@ def get_transducer_train_args(**kwargs) -> Dict:
     return recursive_update(default_args, kwargs)
 
 
-def get_transducer_recog_args(
+def get_transducer_recog_step_args(
     num_classes: int, reduction_subtrahend: int = 1039, reduction_factor: int = 640, **kwargs
 ) -> Dict:
     default_args = {
         "epochs": ["best"],
-        "lm_scales": [0.5, 0.7, 0.9, 1.1],
-        "prior_scales": [0.0, 0.2, 0.4],
+        "lm_scales": [0.7],
+        "prior_scales": [0.0],
         "use_gpu": False,
         "label_scorer_type": "tf-ffnn-transducer",
         "label_scorer_args": {
-            "use_prior": True,
+            "use_prior": False,
             "num_classes": num_classes,
             "extra_args": {
                 "blank_label_index": 0,
@@ -67,14 +67,14 @@ def get_transducer_recog_args(
         "prior_args": {
             "mem_rqmt": 16,
         },
-        "rtf": 5,
-        "mem": 8,
+        "rtf": 50,
+        "mem": 16,
     }
 
     return recursive_update(default_args, kwargs)
 
 
-def get_transducer_align_args(num_classes: int, reduction_factor: int = 4, **kwargs) -> Dict:
+def get_transducer_align_step_args(num_classes: int, reduction_factor: int = 4, **kwargs) -> Dict:
     default_args = {
         "epochs": ["best"],
         "prior_scales": [0.3],

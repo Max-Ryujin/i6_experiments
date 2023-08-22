@@ -1,10 +1,10 @@
 import copy
-from enum import Enum
+from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import Dict, Generic, Optional
 from i6_core import rasr, recognition, returnn
 from i6_experiments.users.berger.helpers import RasrDataInput
-from recipe.i6_experiments.users.berger.helpers.hdf import build_hdf_from_alignment
+from i6_experiments.users.berger.helpers.hdf import build_hdf_from_alignment
 from . import types
 
 from sisyphus import tk
@@ -82,6 +82,19 @@ class NamedCorpusInfo:
     corpus_info: CorpusInfo
 
 
+class ConfigVariant(Enum):
+    TRAIN = auto()
+    PRIOR = auto()
+    ALIGN = auto()
+    RECOG = auto()
+
+
+class FeatureType(Enum):
+    SAMPLES = auto()
+    GAMMATONE = auto()
+    CONCAT_GAMMATONE = auto()
+
+
 @dataclass
 class ReturnnConfigs(Generic[types.ConfigType]):
     train_config: types.ConfigType
@@ -96,6 +109,13 @@ class ReturnnConfigs(Generic[types.ConfigType]):
             self.recog_configs = {"recog": copy.deepcopy(self.prior_config)}
         if self.align_config is None:
             self.align_config = copy.deepcopy(next(iter(self.recog_configs.values())))
+
+
+@dataclass
+class CustomStepKwargs:
+    train_step_kwargs: dict = field(default_factory=dict)
+    align_step_kwargs: dict = field(default_factory=dict)
+    recog_step_kwargs: dict = field(default_factory=dict)
 
 
 class SummaryKey(Enum):

@@ -459,7 +459,7 @@ class RNNDecoderArgs(DecoderArgs):
     enc_key_dim: int = 1024  # also attention dim  # also attention dim
 
     # location feedback
-    loc_conv_att_num_channels: Optional[int] = None
+    # loc_conv_att_num_channels: Optional[int] = None
     loc_conv_att_filter_size: Optional[int] = None
 
     # param init
@@ -479,7 +479,7 @@ class RNNDecoderArgs(DecoderArgs):
     reduceout: bool = True
 
     # lstm lm
-    lstm_lm_proj_dim: int = 1024
+    # lstm_lm_proj_dim: int = 1024
     lstm_lm_dim: int = 1024
     add_lstm_lm: bool = False
 
@@ -504,11 +504,18 @@ class CTCDecoderArgs(DecoderArgs):
     ctc_scale: float = 1.0
     add_att_dec: bool = False
     att_scale: float = 0.3
-    use_ts_discount: bool = False # wip
+    ts_reward: float = 0.0
     blank_prob_scale: float = 0.0
     repeat_prob_scale: float = 0.0
     ctc_prior_correction: bool = False
     prior_scale: float = 1.0
+    logits: bool = False
+    remove_eos: bool = False
+    eos_postfix: bool = False
+    add_eos_to_blank: bool = False
+    ctc_beam_search_tf: bool = False
+    att_masking_fix: bool = False
+    one_minus_term_mul_scale: float = 1.0
 
 
 def create_config(
@@ -923,8 +930,9 @@ def create_config(
         if joint_ctc_att_decode_args.get("remove_eos", False):
             python_prolog += [update_tensor_entry]
 
-    if dec_type == "ctc" and decoder_args['add_att_dec'] is True:
-        python_prolog += ["from returnn.tf.compat import v1 as tf_v1"]
+    if dec_type == "ctc":
+        python_prolog += transformer_decoder.get_python_prolog()
+
 
     # modify hyperparameters based on epoch
     if staged_hyperparams:

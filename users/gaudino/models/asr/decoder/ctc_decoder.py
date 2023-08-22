@@ -2,6 +2,7 @@ from i6_core.returnn.config import CodeWrapper
 from i6_experiments.users.zeineldeen.modules.network import ReturnnNetwork
 from i6_experiments.users.zeineldeen.modules.attention import AttentionMechanism
 
+
 attention_decoder_dict = {
     # reinterpreted for target_embed
     "output_reinterpret": {
@@ -173,12 +174,217 @@ attention_decoder_dict = {
             "output": {"class": "copy", "from": "output_prob"},
         },
     },
-    "att_log_scores": {
-        "class": "activation",
-        "activation": "safe_log",
-        "from": "trigg_att",
-    },
+    # "att_log_scores": {
+    #     "class": "activation",
+    #     "activation": "safe_log",
+    #     "from": "trigg_att",
+    # },
 }
+
+attention_decoder_dict_with_fix = {
+    # reinterpreted for target_embed
+    "output_reinterpret": {
+        "class": "reinterpret_data",
+        "from": "output",
+        "set_sparse": True,
+        "set_sparse_dim": 10025,  # V
+        "initial_output": 0,
+    },
+    "prev_output_reinterpret": {
+        "class": "copy",
+        "from": "prev:output_reinterpret",
+    },
+    "trigg_att": {
+        "class": "subnetwork",
+        "from": [],
+        "n_out": 10025,
+        "name_scope": "",
+        "subnetwork": {
+            "target_embed0": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "from": "base:output_reinterpret",
+                "n_out": 640,
+                "L2": 0.0001,
+                "initial_output": 0,
+            },
+            "_target_embed": {
+                "class": "dropout",
+                "from": "target_embed0",
+                "dropout": 0.1,
+                "dropout_noise_shape": {"*": None},
+            },
+            "target_embed": {
+                "class": "switch",
+                "condition": "base:curr_mask",
+                "true_from": "_target_embed",
+                "false_from": "prev:target_embed",
+            },
+            "s_transformed": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "from": "s",
+                "n_out": 1024,
+                "L2": 0.0001,
+            },
+            "_accum_att_weights": {
+                "class": "eval",
+                "eval": "source(0) + source(1) * source(2) * 0.5",
+                "from": [
+                    "prev:accum_att_weights",
+                    "att_weights",
+                    "base:base:inv_fertility",
+                ],
+                "out_type": {"dim": 1, "shape": (None, 1)},
+            },
+            "accum_att_weights": {
+                "class": "switch",
+                "condition": "base:prev_mask",
+                "true_from": "_accum_att_weights",
+                "false_from": "prev:accum_att_weights",
+                "out_type": {"dim": 1, "shape": (None, 1)},
+            },
+            "weight_feedback": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "from": "prev:accum_att_weights",
+                "n_out": 1024,
+            },
+            "energy_in": {
+                "class": "combine",
+                "kind": "add",
+                "from": [
+                    "base:base:enc_ctx",
+                    "weight_feedback",
+                    "s_transformed",
+                ],
+                "n_out": 1024,
+            },
+            "energy_tanh": {
+                "class": "activation",
+                "activation": "tanh",
+                "from": "energy_in",
+            },
+            "energy": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": False,
+                "from": "energy_tanh",
+                "n_out": 1,
+                "L2": 0.0001,
+            },
+            "att_weights": {"class": "softmax_over_spatial", "from": "energy"},
+            "att0": {
+                "class": "generic_attention",
+                "weights": "att_weights",
+                "base": "base:base:enc_value",
+            },
+            "_att": {
+                "class": "merge_dims",
+                "from": "att0",
+                "axes": "except_batch",
+            },
+            "att": {
+                "class": "switch",
+                "condition": "base:prev_mask",
+                "true_from": "_att",
+                "false_from": "prev:att",
+            },
+            "_s": {
+                "class": "rnn_cell",
+                "unit": "zoneoutlstm",
+                "n_out": 1024,
+                "from": ["prev:target_embed", "prev:att"],
+                "L2": 0.0001,
+                "unit_opts": {
+                    "zoneout_factor_cell": 0.15,
+                    "zoneout_factor_output": 0.05,
+                },
+                "name_scope": "s/rec",  # compatibility with old models
+                "state": CodeWrapper("tf_v1.nn.rnn_cell.LSTMStateTuple('prev:s_c', 'prev:s_h')"),
+            },
+            "s": {
+                "class": "switch",
+                "condition": "base:prev_mask",
+                "true_from": "_s",
+                "false_from": "prev:s",
+            },
+            "_s_c": {
+                "class": "get_last_hidden_state",
+                "from": "_s",
+                "key": "c",
+                "n_out": 1024,
+            },
+            "s_c": {
+                "class": "switch",
+                "condition": "base:prev_mask",
+                "true_from": "_s_c",
+                "false_from": "prev:s_c",
+            },
+            "_s_h": {
+                "class": "get_last_hidden_state",
+                "from": "_s",
+                "key": "h",
+                "n_out": 1024,
+            },
+            "s_h": {
+                "class": "switch",
+                "condition": "base:prev_mask",
+                "true_from": "_s_h",
+                "false_from": "prev:s_h",
+            },
+            "readout_in": {
+                "class": "linear",
+                "activation": None,
+                "with_bias": True,
+                "from": ["s", "prev:target_embed", "att"],
+                "n_out": 1024,
+                "L2": 0.0001,
+            },
+            "readout": {
+                "class": "reduce_out",
+                "from": "readout_in",
+                "num_pieces": 2,
+                "mode": "max",
+            },
+            "output_prob": {
+                "class": "softmax",
+                "from": "readout",
+                "target": "bpe_labels",
+            },
+            "output": {"class": "copy", "from": "output_prob"},
+        },
+    },
+    # "att_log_scores": {
+    #     "class": "activation",
+    #     "activation": "safe_log",
+    #     "from": "trigg_att",
+    # },
+}
+
+ctc_beam_search_tf_string = """
+def ctc_beam_search_decoder_tf(source, **kwargs):
+    # import beam_search_decoder from tensorflow
+    from tensorflow.nn import ctc_beam_search_decoder
+    import tensorflow as tf
+
+    ctc_logits = source(0, as_data=True)
+
+    # TODO: get_sequence_lengths() is deprecated
+    decoded, log_probs = ctc_beam_search_decoder(
+        ctc_logits.get_placeholder_as_time_major(),
+        ctc_logits.get_sequence_lengths(),
+        # merge_repeated=True,
+        beam_width={beam_size},
+    )
+
+    # t1 = tf.sparse.to_dense(decoded[0])
+    t1 = tf.expand_dims(tf.sparse.to_dense(decoded[0]), axis=-1)
+    return t1
+    """
 
 
 class CTCDecoder:
@@ -190,7 +396,7 @@ class CTCDecoder:
     def __init__(
         self,
         base_model,
-        source="ctc",
+        ctc_source="ctc",
         # dropout=0.0,
         # softmax_dropout=0.3,
         # label_smoothing=0.1,
@@ -213,7 +419,7 @@ class CTCDecoder:
         lm_scale=0.3,
         add_att_dec=False,
         att_scale=0.3,
-        use_ts_discount=False,
+        ts_reward=0.0,
         ctc_scale=1.0,
         blank_prob_scale=0.0,  # in log space
         repeat_prob_scale=0.0,  # in log space
@@ -230,6 +436,13 @@ class CTCDecoder:
         # coverage_scale=None,
         # ce_loss_scale=1.0,
         # use_zoneout_output: bool = False,
+        logits=False,
+        remove_eos=False,
+        eos_postfix=False,
+        add_eos_to_blank=False,
+        ctc_beam_search_tf=False,
+        att_masking_fix=False,
+        one_minus_term_mul_scale=1.0,
     ):
         """
         :param base_model: base/encoder model instance
@@ -268,7 +481,7 @@ class CTCDecoder:
 
         self.base_model = base_model
 
-        self.source = source
+        self.ctc_source = ctc_source
 
         # self.dropout = dropout
         # self.softmax_dropout = softmax_dropout
@@ -305,7 +518,7 @@ class CTCDecoder:
 
         self.add_att_dec = add_att_dec
         self.att_scale = att_scale
-        self.use_ts_discount = use_ts_discount
+        self.ts_reward = ts_reward
 
         self.ctc_scale = ctc_scale
         self.blank_prob_scale = blank_prob_scale
@@ -328,10 +541,30 @@ class CTCDecoder:
         #
         # self.use_zoneout_output = use_zoneout_output
 
+        self.logits = logits
+        self.remove_eos = remove_eos
+        self.eos_postfix = eos_postfix
+        self.add_eos_to_blank = add_eos_to_blank
+
+        self.ctc_beam_search_tf = ctc_beam_search_tf
+        self.att_masking_fix = att_masking_fix
+
+        self.one_minus_term_mul_scale = one_minus_term_mul_scale
+
         self.network = ReturnnNetwork()
         self.subnet_unit = ReturnnNetwork()
         self.dec_output = None
         self.output_prob = None
+
+    def get_python_prolog(self):
+        """Called in attention_asr_config to add ctc decoder specific python code to the config."""
+        python_prolog = []
+        if self.add_att_dec:
+            python_prolog += ["from returnn.tf.compat import v1 as tf_v1"]
+        if self.ctc_beam_search_tf:
+            python_prolog += [ctc_beam_search_tf_string.format(beam_size=self.beam_size)]
+
+        return python_prolog
 
     def add_norm_layer(self, subnet_unit: ReturnnNetwork, name: str):
         """Add layer norm layer"""
@@ -388,31 +621,44 @@ class CTCDecoder:
 
     def add_ctc_scores(self, subnet_unit: ReturnnNetwork):
         if self.ctc_prior_correction:
-            subnet_unit.update({
-                "ctc_log_scores_no_prior": {
-                    "class": "activation",
-                    "activation": "safe_log",
-                    "from": "data:source",
-                },
-                "scaled_ctc_log_prior": {
-                    "class": "eval",
-                    "from": "base:ctc_log_prior",
-                    "eval": f"source(0) * {self.prior_scale}",
-                },
-                "ctc_log_scores": {
-                    "class": "combine",
-                    "from": ["ctc_log_scores_no_prior", "scaled_ctc_log_prior"],
-                    "kind": "sub",
-                },
-            })
+            subnet_unit.update(
+                {
+                    "ctc_log_scores_no_prior": {
+                        "class": "activation",
+                        "activation": "safe_log",
+                        "from": "data:source",
+                    },
+                    "scaled_ctc_log_prior": {
+                        "class": "eval",
+                        "from": "base:ctc_log_prior",
+                        "eval": f"source(0) * {self.prior_scale}",
+                    },
+                    "ctc_log_scores_w_prior": {
+                        "class": "combine",
+                        "from": ["ctc_log_scores_no_prior", "scaled_ctc_log_prior"],
+                        "kind": "sub",
+                    },
+                }
+            )
+            self.add_norm_layer(subnet_unit, "ctc_log_scores_w_prior")
+            subnet_unit.update(
+                {
+                    "ctc_log_scores": {
+                        "class": "copy",
+                        "from": "ctc_log_scores_w_prior_renorm",
+                    },
+                }
+            )
         else:
-            subnet_unit.update({
-                "ctc_log_scores": {
-                    "class": "activation",
-                    "activation": "safe_log",
-                    "from": "data:source",
-                },  # [B,V+1]
-            })
+            subnet_unit.update(
+                {
+                    "ctc_log_scores": {
+                        "class": "activation",
+                        "activation": "safe_log",
+                        "from": "data:source",
+                    },  # [B,V+1]
+                }
+            )
 
         subnet_unit.update(
             {
@@ -437,18 +683,23 @@ class CTCDecoder:
         )
 
     def add_score_combination(self, subnet_unit: ReturnnNetwork, att_layer: str = None, lm_layer: str = None):
-        one_minus_term_scale = 1
+        one_minus_term_scale_old = 1
         combine_list = []
         if self.ctc_scale > 0:
             combine_list.append("scaled_ctc_log_scores")
         if self.add_att_dec:
             subnet_unit.update(
                 {
+                    "att_log_scores": {
+                        "class": "activation",
+                        "activation": "safe_log",
+                        "from": att_layer,
+                    },
                     "scaled_att_log_scores": {
                         "class": "eval",
-                        "from": att_layer,
+                        "from": "att_log_scores",
                         "eval": f"{self.att_scale} * source(0)",
-                    }
+                    },
                 }
             )
             combine_list.append("scaled_att_log_scores")
@@ -456,49 +707,31 @@ class CTCDecoder:
         if self.add_ext_lm:
             subnet_unit.update(
                 {
+                    "lm_log_scores": {
+                        "class": "activation",
+                        "activation": "safe_log",
+                        "from": lm_layer,
+                    },
                     "scaled_lm_log_scores": {
                         "class": "eval",
-                        "from": lm_layer,
+                        "from": "lm_log_scores",
                         "eval": f"{self.lm_scale} * source(0)",
-                    }
+                    },
                 }
             )
             combine_list.append("scaled_lm_log_scores")
 
-        if self.use_ts_discount:
-            # not working yet
+        if self.ts_reward > 0:
             subnet_unit.update(
                 {
-                    "const1": {"class": "constant", "value": 1, "dtype": "int32"},
-                    "prev_n_att_contrib_plus_1": {
-                        "class": "add",
-                        "from": ["prev:n_att_contrib", "const1"],
-                    },
-                    "n_att_contrib": {
-                        "class": "switch",
-                        "condition": "curr_mask",
-                        "true_from": "prev_n_att_contrib_plus_1",
-                        "false_from": "prev:n_att_contrib",
-                        "initial_output": 0,
-                    },
-                    "n_att_contrib_plus_1": {
-                        "class": "add",
-                        "from": ["n_att_contrib", "const1"],
-                    },
-                    # TODO: how to access all hypothesis in beam?
-                    "max_n_att_contrib": {
-                        "class": "reduce",
-                        "mode": "max",
-                        "from": "n_att_contrib",
-                    },
-                    "log_ts_discount": {
+                    "ts_reward": {
                         "class": "eval",
-                        "from": ["n_att_contrib", "max_n_att_contrib"],
-                        "eval": "source(0)/source(1)",
-                        "initial_output": 0,
-                    },
+                        "from": "scaled_ctc_log_scores",
+                        "eval": f"source(0) * 0 + {self.ts_reward}",
+                    }
                 }
             )
+            combine_list.append("ts_reward")
 
         subnet_unit.update(
             {
@@ -551,7 +784,7 @@ class CTCDecoder:
                 "scaled_blank_prob": {
                     "class": "eval",
                     "from": "blank_prob",
-                    "eval": f"source(0) ** {one_minus_term_scale}",
+                    "eval": f"source(0) ** {one_minus_term_scale_old}",
                 },
                 "scaled_blank_log_prob": {
                     "class": "eval",
@@ -573,7 +806,7 @@ class CTCDecoder:
                 "scaled_prev_ctc_log_scores": {
                     "class": "eval",
                     "from": "prev_ctc_log_scores",
-                    "eval": f"{one_minus_term_scale} * source(0)",
+                    "eval": f"{one_minus_term_scale_old} * source(0)",
                 },
                 "scaled_prev_ctc_scores": {
                     "class": "activation",
@@ -628,16 +861,98 @@ class CTCDecoder:
                     "class": "choice",
                     "target": "bpe_labels_w_blank",
                     "beam_size": self.beam_size,
-                    "from": "p_comb_sigma_prime",
-                    "input_type": "log_prob",
+                    "from": "p_comb_sigma_prime" if not self.eos_postfix else "p_comb_sigma_prime_w_eos",
+                    "input_type": "logits" if self.logits else "log_prob",
                     "initial_output": 0,
                     "length_normalization": self.length_normalization,
                 },
             }
         )
 
+        if self.one_minus_term_mul_scale != 1.0:
+            subnet_unit.update(
+                {
+                    "mul_scaled_1_minus_term_log": {
+                        "class": "eval",
+                        "from": "1_minus_term_log",
+                        "eval": f"source(0) * {self.one_minus_term_mul_scale}",
+                    },
+                    # [1 - P_ctc(blank|...) - P_ctc(label:=prev:label|...)] * P_att(label|...)  # prev:label != blank
+                    "p_comb_sigma_prime_label": {
+                        "class": "combine",
+                        "kind": "add",
+                        "from": ["mul_scaled_1_minus_term_log", "combined_att_ctc_scores"],
+                    },
+                }
+            )
+
+        if self.eos_postfix:
+            subnet_unit.update(
+                {
+                    "combined_ts_log_scores": {
+                        "class": "combine",
+                        "kind": "add",
+                        "from": ["scaled_att_log_scores", "scaled_lm_log_scores"],
+                    },
+                    "combined_ts_scores": {
+                        "class": "activation",
+                        "activation": "safe_exp",
+                        "from": "combined_ts_log_scores",
+                    },
+                }
+            )
+            if self.add_ext_lm and not self.add_att_dec:
+                ts_score = lm_layer
+            elif self.add_att_dec and not self.add_ext_lm:
+                ts_score = att_layer
+            else:
+                ts_score = "combined_ts_scores"
+
+            subnet_unit.update(
+                {
+                    "t": {"class": "copy", "from": ":i"},
+                    "last_frame": {
+                        "class": "eval",
+                        "from": ["t", "base:enc_seq_len"],
+                        "eval": "tf.equal(source(0), source(1))",  # [B] (bool)
+                        "out_type": {"dtype": "bool"},
+                    },
+                    "ts_eos_prob": {
+                        "class": "gather",
+                        "from": ts_score,
+                        "position": 0,
+                        "axis": "f",
+                    },
+                    "ts_eos_prob_expand": {
+                        "class": "expand_dims",
+                        "from": "ts_eos_prob",
+                        "axis": "f",
+                    },
+                    "zeros": {"class": "constant", "value": 0.0, "shape": (10025,), "with_batch_dim": True},
+                    "last_frame_prob": {
+                        "class": "concat",
+                        "from": [
+                            ("ts_eos_prob_expand", "f"),
+                            ("zeros", "f"),
+                        ],
+                        "allow_broadcast": True,
+                    },
+                    "last_frame_log_prob": {
+                        "class": "activation",
+                        "activation": "safe_log",
+                        "from": "last_frame_prob",
+                    },
+                    "p_comb_sigma_prime_w_eos": {
+                        "class": "switch",
+                        "condition": "last_frame",
+                        "true_from": "last_frame_log_prob",
+                        "false_from": "p_comb_sigma_prime",
+                    },
+                }
+            )
+
     def add_greedy_decoder(self, subnet_unit: ReturnnNetwork):
-        source = "data:source"
+        choice_layer_source = "data:source"
         input_type = None
         if self.blank_prob_scale > 0.0:
             subnet_unit.update(
@@ -679,7 +994,7 @@ class CTCDecoder:
                     },
                 }
             )
-            source = "ctc_w_blank_scale"
+            choice_layer_source = "ctc_w_blank_scale"
             input_type = "log_prob"
 
         elif self.ctc_prior_correction:
@@ -702,27 +1017,68 @@ class CTCDecoder:
                     },
                 }
             )
-            source = "ctc_log_scores_w_prior"
+            choice_layer_source = "ctc_log_scores_w_prior"
 
         if self.length_normalization:
             subnet_unit.add_choice_layer(
-                "output", source, target=self.target_w_blank, beam_size=1, input_type=input_type, initial_output=0
+                "output",
+                choice_layer_source,
+                target=self.target_w_blank,
+                beam_size=1,
+                input_type=input_type,
+                initial_output=0,
             )
         else:
             subnet_unit.add_choice_layer(
                 "output",
-                source,
+                choice_layer_source,
                 target=self.target_w_blank,
-                beam_size=1,
+                beam_size=2,
                 input_type=input_type,
                 initial_output=0,
             )
 
         # recurrent subnetwork
         dec_output = self.network.add_subnet_rec_layer(
-            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.source
+            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.ctc_source
         )
         self.network["output"].pop("max_seq_len", None)
+
+        return dec_output
+
+    def add_ctc_beam_search_decoder_tf(self):
+        dec_output = self.network.update(
+            {
+                "ctc_log": {
+                    "class": "activation",
+                    "from": "ctc",
+                    "activation": "safe_log",
+                },
+                "ctc_decoder": {
+                    "class": "eval",
+                    "from": ["ctc_log"],
+                    "eval": CodeWrapper("ctc_beam_search_decoder_tf"),
+                    "out_type": {
+                        "shape": (None, 1),
+                        "dtype": "int64",
+                    },
+                    # "debug_print_layer_output": True,
+                },
+                "ctc_decoder_merge_dims": {
+                    "class": "merge_dims",
+                    "from": "ctc_decoder",
+                    "axes": ["T", "F"],
+                },
+                "ctc_decoder_output": {
+                    "class": "reinterpret_data",
+                    "from": "ctc_decoder_merge_dims",
+                    "set_sparse": True,
+                    "set_sparse_dim": 10025,
+                    "target": "bpe_labels",
+                    "is_output_layer": True,
+                },
+            }
+        )
 
         return dec_output
 
@@ -778,19 +1134,14 @@ class CTCDecoder:
                     "from": "lm_output",
                     "target": "bpe_labels",
                 },
-                "lm_output_log_prob": {
-                    "class": "activation",
-                    "activation": "safe_log",
-                    "from": "lm_output_prob",
-                },
             }
         )
 
-        self.add_score_combination(subnet_unit, lm_layer="lm_output_log_prob")
+        self.add_score_combination(subnet_unit, lm_layer="lm_output_prob")
 
         # recurrent subnetwork
         dec_output = self.network.add_subnet_rec_layer(
-            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.source
+            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.ctc_source
         )
         self.network["output"].pop("max_seq_len", None)
 
@@ -801,13 +1152,16 @@ class CTCDecoder:
         # add masks
         self.add_masks(subnet_unit)
         # add attention decoder
-        subnet_unit.update(attention_decoder_dict)
+        if self.att_masking_fix:
+            subnet_unit.update(attention_decoder_dict_with_fix)
+        else:
+            subnet_unit.update(attention_decoder_dict)
 
-        self.add_score_combination(subnet_unit, att_layer="att_log_scores")
+        self.add_score_combination(subnet_unit, att_layer="trigg_att")
 
         # recurrent subnetwork
         dec_output = self.network.add_subnet_rec_layer(
-            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.source
+            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.ctc_source
         )
         self.network["output"].pop("max_seq_len", None)
 
@@ -835,26 +1189,81 @@ class CTCDecoder:
                     "from": "lm_output",
                     "target": "bpe_labels",
                 },
-                "lm_output_log_prob": {
-                    "class": "activation",
-                    "activation": "safe_log",
-                    "from": "lm_output_prob",
-                },
             }
         )
 
-        self.add_score_combination(subnet_unit, att_layer="att_log_scores", lm_layer="lm_output_log_prob")
+        self.add_score_combination(subnet_unit, att_layer="trigg_att", lm_layer="lm_output_prob")
 
         # recurrent subnetwork
         dec_output = self.network.add_subnet_rec_layer(
-            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.source
+            "output", unit=subnet_unit.get_net(), target=self.target_w_blank, source=self.ctc_source
         )
         self.network["output"].pop("max_seq_len", None)
 
         return dec_output
 
+    def remove_eos_from_ctc_logits(self):
+        """Remove eos from ctc logits and set ctc_source to the new logits."""
+        self.network.add_slice_layer("ctc_eos_slice", self.ctc_source, axis="f", slice_start=0, slice_end=1)
+        self.network.add_eval_layer("zeros", "ctc_eos_slice", eval="source(0)*0.0")
+
+        if self.add_eos_to_blank:
+            self.network.add_slice_layer(
+                "ctc_no_eos_no_blank_slice", self.ctc_source, axis="f", slice_start=1, slice_end=10025
+            )
+            self.network.add_slice_layer(
+                "ctc_blank_slice", self.ctc_source, axis="f", slice_start=10025, slice_end=10026
+            )
+            self.network.update(
+                {
+                    "ctc_blank_plus_eos": {
+                        "class": "combine",
+                        "kind": "add",
+                        "from": ["ctc_blank_slice", "ctc_eos_slice"],
+                    },
+                    "ctc_no_eos": {
+                        "class": "concat",
+                        "from": [
+                            ("zeros", "f"),
+                            ("ctc_no_eos_no_blank_slice", "f"),
+                            ("ctc_blank_plus_eos", "f"),
+                        ],
+                    },
+                }
+            )
+        else:
+            self.network.add_slice_layer("ctc_no_eos_slice", self.ctc_source, axis="f", slice_start=1, slice_end=10026)
+            self.network.update(
+                {
+                    "ctc_no_eos": {
+                        "class": "concat",
+                        "from": [
+                            ("zeros", "f"),
+                            ("ctc_no_eos_slice", "f"),
+                        ],
+                    },
+                }
+            )
+
+        self.ctc_source = "ctc_no_eos"
+        if self.eos_postfix and (self.add_att_dec or self.add_ext_lm):
+            self.network.update(
+                {
+                    "ctc_no_eos_postfix_in_time": {
+                        "class": "postfix_in_time",
+                        "from": "ctc_no_eos",
+                    },
+                }
+            )
+            self.ctc_source = "ctc_no_eos_postfix_in_time"
+
     def create_network(self):
+        self.decision_layer_name = "out_best_wo_blank"
+
+        if self.remove_eos:
+            self.remove_eos_from_ctc_logits()
         if self.add_ext_lm and not self.add_att_dec:
+            self.network.add_length_layer("enc_seq_len", "encoder", sparse=False)
             self.dec_output = self.add_greedy_with_ext_lm_decoder(self.subnet_unit)
         elif self.add_att_dec and not self.add_ext_lm:
             self.add_enc_output_for_att()
@@ -862,11 +1271,14 @@ class CTCDecoder:
         elif self.add_att_dec and self.add_ext_lm:
             self.add_enc_output_for_att()
             self.dec_output = self.add_greedy_decoder_with_lm_and_att(self.subnet_unit)
+        elif self.ctc_beam_search_tf:
+            self.dec_output = self.add_ctc_beam_search_decoder_tf()
+            self.decision_layer_name = "ctc_decoder_output"
+            return self.dec_output
         else:
             self.dec_output = self.add_greedy_decoder(self.subnet_unit)
 
-        self.add_filter_blank_and_merge_labels_layers(self.base_model.network)
-        self.decision_layer_name = "out_best_wo_blank"
+        self.add_filter_blank_and_merge_labels_layers(self.network)
 
         return self.dec_output
 
@@ -929,12 +1341,13 @@ class CTCDecoder:
 
     def add_enc_output_for_att(self):
         # add to base model
-        self.base_model.network.add_linear_layer(
+        self.network.add_linear_layer(
             "enc_ctx", "encoder", with_bias=True, n_out=self.enc_key_dim, l2=self.base_model.l2
         )
-        self.base_model.network.add_split_dim_layer(
+        self.network.add_split_dim_layer(
             "enc_value", "encoder", dims=(self.att_num_heads, self.enc_value_dim // self.att_num_heads)
         )
-        self.base_model.network.add_linear_layer(
+        self.network.add_linear_layer(
             "inv_fertility", "encoder", activation="sigmoid", n_out=self.att_num_heads, with_bias=False
         )
+        self.network.add_length_layer("enc_seq_len", "encoder", sparse=False)

@@ -1,6 +1,7 @@
 # -------------------- Imports --------------------
 
 from abc import ABC, abstractmethod
+import copy
 from typing import Dict, Generic, List, Optional
 
 from i6_core import corpus, rasr, recognition
@@ -35,6 +36,9 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
             str, dataclasses.ReturnnConfigs[types.ConfigType]
         ] = {}
 
+        # exp-name mapped to CustomStepKwargs collection
+        self._custom_step_kwargs: Dict[str, dataclasses.CustomStepKwargs] = {}
+
         # exp-name mapped to ReturnnConfigs collection
         self._train_jobs: Dict[str, types.TrainJobType] = {}
 
@@ -67,11 +71,19 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
 
     def cleanup_experiments(self) -> None:
         self._returnn_configs.clear()
+        self._custom_step_kwargs.clear()
 
     def add_experiment_configs(
-        self, name: str, returnn_configs: dataclasses.ReturnnConfigs[types.ConfigType]
+        self,
+        name: str,
+        returnn_configs: dataclasses.ReturnnConfigs[types.ConfigType],
+        custom_step_kwargs: Optional[dataclasses.CustomStepKwargs] = None,
     ) -> None:
         self._returnn_configs[name] = returnn_configs
+        if custom_step_kwargs is not None:
+            self._custom_step_kwargs[name] = custom_step_kwargs
+        else:
+            self._custom_step_kwargs[name] = dataclasses.CustomStepKwargs()
 
     def init_corpora(
         self,
@@ -105,8 +117,10 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
         stm_kwargs: Dict,
         scorer_type: types.ScoreJobType,
         score_kwargs: Dict,
+        stm_path: Optional[tk.Path] = None,
     ) -> dataclasses.ScorerInfo:
-        stm_path = corpus.CorpusToStmJob(corpus_file, **stm_kwargs).out_stm_path
+        if stm_path is None:
+            stm_path = corpus.CorpusToStmJob(corpus_file, **stm_kwargs).out_stm_path
         return dataclasses.ScorerInfo(
             ref_file=stm_path, job_type=scorer_type, score_kwargs=score_kwargs
         )
@@ -117,6 +131,7 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
         scorer_type: types.ScoreJobType = recognition.ScliteJob,
         stm_kwargs: Dict = {},
         score_kwargs: Dict = {},
+        stm_path: Optional[tk.Path] = None,
     ) -> None:
         if scoring_corpora is None:
             scoring_corpora = {}
@@ -132,6 +147,7 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
                 stm_kwargs=stm_kwargs,
                 scorer_type=scorer_type,
                 score_kwargs=score_kwargs,
+                stm_path=stm_path,
             )
             self._corpus_info[key].scorer = scorer
 
@@ -139,11 +155,15 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
 
     def run_train_step(self, **kwargs) -> None:
         for train_exp_name, configs in self._returnn_configs.items():
+            mod_kwargs = copy.deepcopy(kwargs)
+            mod_kwargs.update(
+                self._custom_step_kwargs[train_exp_name].train_step_kwargs
+            )
             named_train_config = dataclasses.NamedConfig(
                 train_exp_name, configs.train_config
             )
             self._train_jobs[train_exp_name] = self._functors.train(
-                train_config=named_train_config, **kwargs
+                train_config=named_train_config, **mod_kwargs
             )
 
     def run_recogs_for_corpora(
@@ -172,15 +192,29 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
 
     def run_dev_recog_step(self, **kwargs) -> None:
         for train_exp_name in self._returnn_configs.keys():
-            self.run_recogs_for_corpora(self._dev_corpora, train_exp_name, **kwargs)
+            mod_kwargs = copy.deepcopy(kwargs)
+            mod_kwargs.update(
+                self._custom_step_kwargs[train_exp_name].recog_step_kwargs
+            )
+            self.run_recogs_for_corpora(self._dev_corpora, train_exp_name, **mod_kwargs)
 
     def run_test_recog_step(self, **kwargs) -> None:
         for train_exp_name in self._returnn_configs.keys():
-            self.run_recogs_for_corpora(self._test_corpora, train_exp_name, **kwargs)
+            mod_kwargs = copy.deepcopy(kwargs)
+            mod_kwargs.update(
+                self._custom_step_kwargs[train_exp_name].recog_step_kwargs
+            )
+            self.run_recogs_for_corpora(
+                self._test_corpora, train_exp_name, **mod_kwargs
+            )
 
     def run_align_step(self, **kwargs) -> Dict:
         results = {}
         for train_exp_name in self._returnn_configs.keys():
+            mod_kwargs = copy.deepcopy(kwargs)
+            mod_kwargs.update(
+                self._custom_step_kwargs[train_exp_name].align_step_kwargs
+            )
             train_job = self._train_jobs[train_exp_name]
             named_train_job = dataclasses.NamedTrainJob(train_exp_name, train_job)
             exp_results = {}
@@ -195,7 +229,7 @@ class BaseSystem(ABC, Generic[types.TrainJobType, types.ConfigType]):
                     prior_config=prior_config,
                     align_config=align_config,
                     align_corpus=named_corpus,
-                    **kwargs,
+                    **mod_kwargs,
                 )
             if len(exp_results) == 1:
                 exp_results = next(iter(exp_results.values()))
