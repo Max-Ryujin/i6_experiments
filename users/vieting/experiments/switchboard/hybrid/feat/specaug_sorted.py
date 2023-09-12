@@ -48,9 +48,14 @@ def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices=None):
     if batch_axis > axis:
         cond = tf.transpose(cond)  # (dim,batch)
     cond = tf.reshape(cond, [tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)])
-    if sorted_indices is not None:
+    def true_branch():
         inverse_permutation = tf.argsort(sorted_indices)
-        cond = tf.gather(cond, inverse_permutation, axis=axis)   
+        return tf.gather(cond, inverse_permutation, axis=axis)
+
+    def false_branch():
+        return cond
+
+    cond = tf.cond(tf.equal(sorted_indices, None), false_branch, true_branch)   
     from TFUtil import where_bc
     x = where_bc(cond, 0.0, x)
     return x
