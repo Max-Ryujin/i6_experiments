@@ -48,6 +48,7 @@ def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices=None):
     if batch_axis > axis:
         cond = tf.transpose(cond)  # (dim,batch)
     cond = tf.reshape(cond, [tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)])
+
     def true_branch():
         inverse_permutation = tf.argsort(sorted_indices)
         return tf.gather(cond, inverse_permutation, axis=axis)
@@ -55,8 +56,9 @@ def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices=None):
     def false_branch():
         return cond
 
-    cond = tf.cond(tf.equal(sorted_indices, None), false_branch, true_branch)   
+    cond = tf.cond(tf.equal(sorted_indices, None), false_branch, true_branch)
     from TFUtil import where_bc
+
     x = where_bc(cond, 0.0, x)
     return x
 
@@ -168,7 +170,7 @@ def specaug_layer_sorted(in_layer, mask_divisor=None):
             "eval": "self.network.get_config().typed_value('specaugment_eval_func')("
             "source(0, as_data=True, auto_convert=False),"
             "network=self.network,"
-            "mask_divisor="+str(mask_divisor)+")",
+            "mask_divisor=" + str(mask_divisor) + ")",
         }
     else:
         return {
