@@ -24,46 +24,37 @@ def sort_filters_by_center_freq(x):
 
     return sorted_idcs
 
-
-def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices=None):
-    """
-    :param tf.Tensor x: (batch,time,feature)
-    :param int batch_axis:
-    :param int axis:
-    :param tf.Tensor pos: (batch,)
-    :param int|tf.Tensor max_amount: inclusive
-    :param tf.Tensor|None sorted_indices: sorted indices (optional)
-    """
-    from returnn.tf.compat import v1 as tf
-
-    ndim = x.get_shape().ndims
-    n_batch = tf.shape(x)[batch_axis]
-    dim = tf.shape(x)[axis]
-    amount = tf.random_uniform(shape=(n_batch,), minval=1, maxval=max_amount + 1, dtype=tf.int32)
-    pos2 = tf.minimum(pos + amount, dim)
-    idxs = tf.expand_dims(tf.range(0, dim), 0)  # (1,dim)
-    pos_bc = tf.expand_dims(pos, 1)  # (batch,1)
-    pos2_bc = tf.expand_dims(pos2, 1)  # (batch,1)
-    cond = tf.logical_and(tf.greater_equal(idxs, pos_bc), tf.less(idxs, pos2_bc))  # (batch,dim)
-    if batch_axis > axis:
-        cond = tf.transpose(cond)  # (dim,batch)
-    cond = tf.reshape(cond, [tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)])
-
-    def true_branch():
+def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices):
+        """
+        :param tf.Tensor x: (batch,time,feature)
+        :param int batch_axis:
+        :param int axis:
+        :param tf.Tensor pos: (batch,)
+        :param int|tf.Tensor max_amount: inclusive
+        :param tf.Tensor|None sorted_indices: sorted indices (optional)
+        """
+        from returnn.tf.compat import v1 as tf
+        ndim = x.get_shape().ndims
+        n_batch = tf.shape(x)[batch_axis]
+        dim = tf.shape(x)[axis]
+        amount = tf.random.uniform(shape=(n_batch,), minval=max_amount, maxval=max_amount + 1, dtype=tf.int32)
+        pos2 = tf.math.minimum(pos + amount, dim)
+        idxs = tf.expand_dims(tf.range(0, dim), 0)  # (1,dim)
+        pos_bc = tf.expand_dims(pos, 1)  # (batch,1)
+        pos2_bc = tf.expand_dims(pos2, 1)  # (batch,1)
+        cond = tf.math.logical_and(tf.greater_equal(idxs, pos_bc), tf.less(idxs, pos2_bc))  # (batch,dim)
+        if batch_axis > axis:
+            cond = tf.transpose(cond)  # (dim,batch)
+        cond = tf.reshape(cond, [tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)])
         inverse_permutation = tf.argsort(sorted_indices)
-        return tf.gather(cond, inverse_permutation, axis=axis)
-
-    def false_branch():
-        return cond
-
-    cond = tf.cond(tf.equal(sorted_indices, None), false_branch, true_branch)
-    from TFUtil import where_bc
-
-    x = where_bc(cond, 0.0, x)
-    return x
+        cond = tf.gather(cond, inverse_permutation, axis=axis)
+        from TFUtil import where_bc
+        x = where_bc(cond, 0.0, x)
+        return x
 
 
-def _random_mask(x, batch_axis, axis, min_num, max_num, max_dims, sorted_indices=None):
+
+def _random_mask(x, batch_axis, axis, min_num, max_num, max_dims, sorted_indices):
     """
     :param tf.Tensor x: (batch,time,feature)
     :param int batch_axis:
@@ -138,6 +129,7 @@ def specaugment_eval_func(data, network, mask_divisor=5, time_factor=1):
             min_num=step1 + step2,
             max_num=tf.maximum(tf.shape(x)[data.time_dim_axis] // 100, 2) * (1 + step1 + step2 * 2),
             max_dims=20 // time_factor,
+            sorted_indices=tf.range(tf.shape(x)[data.time_dim_axis]),
         )
 
         # Apply freq masking
@@ -149,6 +141,7 @@ def specaugment_eval_func(data, network, mask_divisor=5, time_factor=1):
             max_num=2 + step1 + step2 * 2,
             max_dims=data.dim // mask_divisor,
             sorted_indices=sorted_idce,
+            sorted = True,
         )
         return x_masked
 
