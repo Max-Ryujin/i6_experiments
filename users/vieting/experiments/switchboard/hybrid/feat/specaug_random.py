@@ -55,7 +55,7 @@ def _random_mask(x, batch_axis, axis, min_num, max_num, max_dims, shuffling=Fals
     # indices = tf.Print(indices, ["indices", indices, tf.shape(indices)])
     if isinstance(num, int):
         for i in range(num):
-            x = _mask(x, batch_axis=batch_axis, axis=axis, pos=indices[:, i], max_amount=max_dims)
+            x = _mask(x, batch_axis=batch_axis, axis=axis, pos=indices[:, i], max_amount=max_dims, shuffled=shuffling)
     else:
         _, x = tf.while_loop(
             cond=lambda i, _: tf.less(i, tf.reduce_max(num)),
