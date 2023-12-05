@@ -37,7 +37,7 @@ def _mask(x, batch_axis, axis, pos, max_amount, sorted_indices):
         ndim = x.get_shape().ndims
         n_batch = tf.shape(x)[batch_axis]
         dim = tf.shape(x)[axis]
-        amount = tf.random.uniform(shape=(n_batch,), minval=max_amount, maxval=max_amount + 1, dtype=tf.int32)
+        amount = tf.random.uniform(shape=(n_batch,), minval=1, maxval=max_amount + 1, dtype=tf.int32)
         pos2 = tf.math.minimum(pos + amount, dim)
         idxs = tf.expand_dims(tf.range(0, dim), 0)  # (1,dim)
         pos_bc = tf.expand_dims(pos, 1)  # (batch,1)
@@ -70,10 +70,10 @@ def _random_mask(x, batch_axis, axis, min_num, max_num, max_dims, sorted_indices
     if isinstance(min_num, int) and isinstance(max_num, int) and min_num == max_num:
         num = min_num
     else:
-        num = tf.random_uniform(shape=(n_batch,), minval=min_num, maxval=max_num + 1, dtype=tf.int32)
+        num = tf.random.uniform(shape=(n_batch,), minval=min_num, maxval=max_num + 1, dtype=tf.int32)
     # https://github.com/tensorflow/tensorflow/issues/9260
     # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
-    z = -tf.log(-tf.log(tf.random_uniform((n_batch, tf.shape(x)[axis]), 0, 1)))
+    z = -tf.log(-tf.log(tf.random.uniform((n_batch, tf.shape(x)[axis]), 0, 1)))
     _, indices = tf.nn.top_k(z, num if isinstance(num, int) else tf.reduce_max(num))
     # indices should be sorted, and of shape (batch,num), entries (int32) in [0,dim)
     if isinstance(num, int):
@@ -141,7 +141,6 @@ def specaugment_eval_func(data, network, mask_divisor=5, time_factor=1):
             max_num=2 + step1 + step2 * 2,
             max_dims=data.dim // mask_divisor,
             sorted_indices=sorted_idce,
-            sorted = True,
         )
         return x_masked
 
