@@ -749,6 +749,7 @@ def run_scf_audio_perturbation():
     }
 
     perturbation_args = [
+<<<<<<< HEAD
         {"speed": {"prob": 0.6, "minimum": 0.88, "maximum": 1.12}},
         {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
         {"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
@@ -767,6 +768,35 @@ def run_scf_audio_perturbation():
         {"non_linearity": {"prob": 0.4, "minimum": 0.8, "maximum": 1.2}},
         {"non_linearity": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
         {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+=======
+        {'speed': {'prob': 0.6, 'minimum': 0.8, 'maximum': 1.2}},
+        {'speed': {'prob': 0.6, 'minimum': 0.7, 'maximum': 1.3}},
+        {'speed': {'prob': 0.5, 'minimum': 0.9, 'maximum': 1.1}},
+        {'speed': {'prob': 0.5, 'minimum': 0.8, 'maximum': 1.2}},
+        {'speed': {'prob': 0.5, 'minimum': 0.7, 'maximum': 1.3}},
+        {'speed': {'prob': 0.4, 'minimum': 0.9, 'maximum': 1.1}},
+        {'speed': {'prob': 0.4, 'minimum': 0.8, 'maximum': 1.2}},
+        {'speed': {'prob': 0.4, 'minimum': 0.7, 'maximum': 1.3}},
+        {'tempo': {'prob': 0.4, 'minimum': 0.9, 'maximum': 1.1}},
+        {'tempo': {'prob': 0.4, 'minimum': 0.8, 'maximum': 1.2}},
+        {'tempo': {'prob': 0.4, 'minimum': 0.7, 'maximum': 1.3}},
+        {'tempo': {'prob': 0.5, 'minimum': 0.9, 'maximum': 1.1}},
+        {'tempo': {'prob': 0.5, 'minimum': 0.8, 'maximum': 1.2}},
+        {'tempo': {'prob': 0.5, 'minimum': 0.7, 'maximum': 1.3}},
+        {'tempo': {'prob': 0.6, 'minimum': 0.9, 'maximum': 1.1}},
+        {'tempo': {'prob': 0.6, 'minimum': 0.8, 'maximum': 1.2}},
+        {'tempo': {'prob': 0.6, 'minimum': 0.7, 'maximum': 1.3}},
+        {'preemphasis': {'prob': 0.9, 'minimum': 0.9, 'maximum': 1.0}},
+        {'preemphasis': {'prob': 0.9, 'minimum': 0.8, 'maximum': 1.0}},
+        {'preemphasis': {'prob': 0.8, 'minimum': 0.9, 'maximum': 1.0}},
+        {'preemphasis': {'prob': 0.8, 'minimum': 0.8, 'maximum': 1.0}},
+        {'codecs': {'encoding': 'ULAW', 'prob': 0.4}},
+        {'codecs': {'encoding': 'ULAW', 'prob': 0.6}},
+        {'non_linearity': {'prob': 0.4,  'minimum': 0.1, 'maximum': 0.3}},
+        {'non_linearity': {'prob': 0.4,  'minimum': 0.2, 'maximum': 0.4}},
+        {'non_linearity': {'prob': 0.6,  'minimum': 0.1, 'maximum': 0.3}},
+        {'non_linearity': {'prob': 0.6,  'minimum': 0.2, 'maximum': 0.4}},
+>>>>>>> a3d2d613d (Fix typo in codec key in run_scf_audio_perturbation_gridsearch() function)
     ]
 
     def process_args(args: Dict[str, Any]):
