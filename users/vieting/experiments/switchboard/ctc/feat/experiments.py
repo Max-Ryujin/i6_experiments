@@ -769,39 +769,53 @@ def run_scf_audio_perturbation():
         {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
     ]
 
-    def process_args(args: Dict[str, Any]):
+    def process_args(args):
         """
         Process the argument dictionary to generate a key string and a report string.
+
+        Args:
+            args (dict): The argument dictionary to process.
 
         Returns:
             tuple: A tuple containing the key string and the report string.
         """
-
+        arg_exp_name = list(args.keys())
+        arg_values = list(args.values())
         key_string = ""
-        report_dict = {}
+        report_values = ""
 
-        for key, value in args.items():
+        for i in range(len(arg_exp_name)):
+            key = arg_exp_name[i]
+            value = arg_values[i]
 
             if key in ["speed", "tempo", "preemphasis", "non_linearity"]:
-                key_component = f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}"
-                key_string += key_component
-                report_dict[key] = f"{value['prob']}_{value['minimum']}_{value['maximum']}"
+                key_string += f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}_"
+                report_values += f"{key}: '{value['prob']}_{value['minimum']}_{value['maximum']}' "
             elif key == "codecs":
-                codecs_str = "_".join([f"{codec['encoding']}_{codec['prob']}" for codec in value])
-                key_string += f"{key}_{codecs_str}_"
-                report_dict[key] = codecs_str
+                key_string += f"{key}_{value[0]['encoding']}_{value[0]['prob']}_"
+                report_values += f"{key} (encoding: {value[0]['encoding']}): '{value[0]['prob']}' "
             else:
                 raise ValueError(f"Unknown argument name: {key}")
 
-        return key_string, report_dict
+        return key_string, report_values
 
     nn_base_args = {}
 
-    for speed in speeds:
-        key_suffix = f"speed_{speed['prob']}_{speed['minimum']}_{speed['maximum']}"
+    for args in perturbation_args:
+        arg_key = list(args.keys())[0]
+        arg_values = list(args.values())[0]
+
+        # Check if arg_values is a dictionary (has 'minimum' and 'maximum') or a list (like 'codecs')
+        if isinstance(arg_values, dict):
+            key_suffix = f"{arg_key}_{arg_values['prob']}_{arg_values['minimum']}_{arg_values['maximum']}_"
+            report_values = f"{arg_key}: '{arg_values['prob']}_{arg_values['minimum']}_{arg_values['maximum']}'"
+        elif isinstance(arg_values, list):
+            key_suffix = f"{arg_key}_{arg_values[0]['encoding']}_{arg_values[0]['prob']}_"
+            report_values = f"{arg_key} (encoding: {arg_values[0]['encoding']}): '{arg_values[0]['prob']}'"
+
+        # Construct the key and report_args
         key = f"scf_bs2x5k_perturb_{key_suffix}"
-        audio_perturb_args = {"speed": speed}
-        report_args = {"speed": f"{speed['prob']}_{speed['minimum']}_{speed['maximum']}"}
+        report_args = {key: report_values}
         nn_base_args[key] = dict(
             returnn_args={
                 "extra_args": {
