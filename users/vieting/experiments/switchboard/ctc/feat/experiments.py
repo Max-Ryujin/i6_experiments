@@ -1,6 +1,7 @@
 import copy
 import os.path
 from sisyphus import tk, gs
+from sisyphus.delayed_ops import DelayedFormat
 from typing import Any, Dict
 
 from i6_core.returnn.config import CodeWrapper
@@ -769,35 +770,31 @@ def run_scf_audio_perturbation():
         {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
     ]
 
-    def process_args(args):
+    def process_args(args: Dict[str, Any]):
         """
         Process the argument dictionary to generate a key string and a report string.
-
-        Args:
-            args (dict): The argument dictionary to process.
 
         Returns:
             tuple: A tuple containing the key string and the report string.
         """
-        arg_exp_name = list(args.keys())
-        arg_values = list(args.values())
-        key_string = ""
-        report_values = ""
 
-        for i in range(len(arg_exp_name)):
-            key = arg_exp_name[i]
-            value = arg_values[i]
+        key_string = ""
+        report_values = {}
+
+        for key, value in args.items():
 
             if key in ["speed", "tempo", "preemphasis", "non_linearity"]:
-                key_string += f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}_"
-                report_values += f"{key}: '{value['prob']}_{value['minimum']}_{value['maximum']}' "
+                key_component = f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}"
+                key_string += key_component
+                report_values[key] = f"{value['prob']}_{value['minimum']}_{value['maximum']}"
             elif key == "codecs":
-                key_string += f"{key}_{value[0]['encoding']}_{value[0]['prob']}_"
-                report_values += f"{key} (encoding: {value[0]['encoding']}): '{value[0]['prob']}' "
+                codecs_str = "_".join([f"{codec['encoding']}_{codec['prob']}" for codec in value])
+                key_string += f"{key}_{codecs_str}_"
+                report_values[key] = codecs_str
             else:
                 raise ValueError(f"Unknown argument name: {key}")
 
-        return key_string, report_values
+        return key_string, report_dict
 
     nn_base_args = {}
 
