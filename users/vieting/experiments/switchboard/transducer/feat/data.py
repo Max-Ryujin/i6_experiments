@@ -132,6 +132,7 @@ def get_switchboard_data():
 def get_returnn_base_data(
     partition_epoch: Optional[Dict[str, int]] = None,
     context_window: Optional[Dict[str, int]] = None,
+    pre_process=None,
 ) -> Dict[str, Union[OggZipHdfDataInput, Dict[str, OggZipHdfDataInput]]]:
     """
     Get basic dataset with ogg input and hdf targets.
@@ -158,6 +159,8 @@ def get_returnn_base_data(
         "features": "raw",
         "peak_normalization": True
     }
+    if pre_process is not None:
+        audio["pre_process"] = pre_process
     ogg_zip_base_args = dict(
         oggzip_files=[ogg_zip_job.out_ogg_zip],
         alignments=[],
