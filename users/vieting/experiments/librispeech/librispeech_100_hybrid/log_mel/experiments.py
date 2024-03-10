@@ -9,7 +9,7 @@ from ..wav2vec2.data import get_ls100_oggzip_hdf_data_split_train_cv
 from .baseline_args import get_nn_args as get_nn_args_baseline
 from .default_tools import RETURNN_ROOT, RETURNN_EXE, RASR_BINARY_PATH
 from i6_experiments.users.rossenbach.experiments.librispeech.librispeech_100_hybrid.data import get_corpus_data_inputs
-from i6_experiments.common.baselines.librispeech.ls100.gmm.baseline_config import run_librispeech_100_common_baseline
+from .gmm_baseline import run_librispeech_100_common_baseline
 
 def run_gmm_system():
     system = run_librispeech_100_common_baseline()
@@ -37,22 +37,15 @@ def get_hybrid_nn_system(
         nn_dev_data_inputs,
         nn_test_data_inputs,
     ) = get_corpus_data_inputs(gmm_system)
-
-    (
-        nn_train_data_inputs,
-        nn_cv_data_inputs,
-        nn_devtrain_data_inputs,
-    ) = get_ls100_oggzip_hdf_data_split_train_cv(gmm_system)
-
     if train_seq_ordering:
         nn_train_data_inputs["librespeech.train"].seq_ordering = train_seq_ordering
     if audio_opts:
         nn_train_data_inputs["librespeech.train"].audio = audio_opts
         nn_cv_data_inputs["librespeech.cv"].audio = audio_opts
         nn_devtrain_data_inputs["librespeech.devtrain"].audio = audio_opts
-
+    returnn_root = tk.Path("/u/vieting/testing/returnn", hash_overwrite="LIBRISPEECH_DEFAULT_RETURNN_ROOT")
     hybrid_nn_system = HybridSystem(
-        returnn_root=RETURNN_ROOT,
+        returnn_root=returnn_root,
         returnn_python_exe=RETURNN_EXE,
         rasr_binary_path=RASR_BINARY_PATH,
     )
@@ -60,9 +53,9 @@ def get_hybrid_nn_system(
         rasr_init_args=rasr_init_args,
         train_data={"train-clean-100.train": data["train"]},
         cv_data={"train-clean-100.cv": data["cv"]},
-        devtrain_data={"train-clean-100.devtrain": data["devtrain"]},
+        # devtrain_data={"train-clean-100.devtrain": data["devtrain"]},
         dev_data=nn_dev_data_inputs,
-        test_data=nn_test_data_inputs,
+        # test_data=nn_test_data_inputs,
         train_cv_pairing=[tuple(["train-clean-100.train", "train-clean-100.cv"])],
     )
 
@@ -82,7 +75,7 @@ def run_baseline_mel():
     nn_args = get_nn_args_baseline(
         nn_base_args={
             "lm80_fft256": dict(
-                returnn_args=dict(batch_size=5000),
+                returnn_args={"batch_size": 5000},
                 feature_args=log_mel_args_8khz,
             ),
         },
@@ -93,7 +86,7 @@ def run_baseline_mel():
     nn_steps.add_step("nn", nn_args)
     hybrid_nn_system = get_hybrid_nn_system(context_window=441)
     hybrid_nn_system.run(nn_steps)
-    for train_job in hybrid_nn_system.jobs["librespeech.train_librespeech.cv"].values():
+    for train_job in hybrid_nn_system.jobs["train-clean-100.train_train-clean-100.cv"].values():
         # noinspection PyUnresolvedReferences
         train_job.rqmt.update({"gpu_mem": 11, "mem": 10})
 
