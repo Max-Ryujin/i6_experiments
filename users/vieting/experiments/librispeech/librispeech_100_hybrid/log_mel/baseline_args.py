@@ -2,7 +2,7 @@ import copy
 from dataclasses import dataclass
 import numpy as np
 from typing import List, Dict, Any
-
+import ipdb
 from i6_core.returnn.config import ReturnnConfig
 from i6_experiments.common.setups.rasr.util import HybridArgs
 
@@ -20,18 +20,20 @@ from i6_experiments.common.setups.returnn_common.serialization import (
 from .default_tools import RETURNN_COMMON
 
 
-def get_nn_args(num_outputs: int = 12001, num_epochs: int = 250, use_rasr_returnn_training=True, **net_kwargs):
+def get_nn_args(num_outputs: int = 12001, num_epochs: int = 250, use_rasr_returnn_training=True, datasets={}, **net_kwargs):
     evaluation_epochs  = list(range(num_epochs, num_epochs + 1, 10))
 
     returnn_configs = get_rc_returnn_configs(
         num_inputs=50, num_outputs=num_outputs, batch_size=5000,
         evaluation_epochs=evaluation_epochs,
+        datasets=datasets,
     )
 
     returnn_recog_configs = get_rc_returnn_configs(
         num_inputs=50, num_outputs=num_outputs, batch_size=5000,
         evaluation_epochs=evaluation_epochs,
         recognition=True,
+        datasets=datasets,
     )
 
 
@@ -110,13 +112,20 @@ def get_default_data_init_args(num_inputs: int, num_outputs: int):
 
 
 def get_rc_returnn_configs(
-        num_inputs: int, num_outputs: int, batch_size: int, evaluation_epochs: List[int],
+        num_inputs: int,
+        datasets: Dict[str, Dict],
+        num_outputs: int, batch_size: int, evaluation_epochs: List[int],
         recognition=False
 ):
     # ******************** blstm base ********************
 
     base_config = {
-        }
+        "extern_data": {
+            "data": {"dim": num_inputs},
+        },
+        **datasets,
+    }
+    ipdb.set_trace()
     base_post_config = {
         "use_tensorflow": True,
         "debug_print_layer_output_template": True,

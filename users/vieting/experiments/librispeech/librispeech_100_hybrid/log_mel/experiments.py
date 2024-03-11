@@ -1,7 +1,7 @@
 import copy
 from typing import Any, Dict, Optional
 from sisyphus import gs, tk
-
+import ipdb
 from i6_core.features.common import samples_flow
 from i6_experiments.common.setups.rasr.util import RasrSteps
 from i6_experiments.common.setups.rasr.hybrid_system import HybridSystem
@@ -43,9 +43,9 @@ def get_hybrid_nn_system(
         nn_train_data_inputs["librespeech.train"].audio = audio_opts
         nn_cv_data_inputs["librespeech.cv"].audio = audio_opts
         nn_devtrain_data_inputs["librespeech.devtrain"].audio = audio_opts
-    returnn_root = tk.Path("/u/vieting/testing/returnn", hash_overwrite="LIBRISPEECH_DEFAULT_RETURNN_ROOT")
+    #returnn_root = tk.Path("/u/vieting/testing/returnn", hash_overwrite="LIBRISPEECH_DEFAULT_RETURNN_ROOT")
     hybrid_nn_system = HybridSystem(
-        returnn_root=returnn_root,
+        returnn_root=RETURNN_ROOT,
         returnn_python_exe=RETURNN_EXE,
         rasr_binary_path=RASR_BINARY_PATH,
     )
@@ -58,33 +58,36 @@ def get_hybrid_nn_system(
         # test_data=nn_test_data_inputs,
         train_cv_pairing=[tuple(["train-clean-100.train", "train-clean-100.cv"])],
     )
-
+    hybrid_nn_system.datasets = data
+    ipdb.set_trace()
     return hybrid_nn_system
 
 
 def run_baseline_mel():
     gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/librespeech/hybrid/feat/"
-
     log_mel_args_8khz = {
         "class": "LogMelNetwork",
         "wavenorm": True,
         "frame_size": 200,
         "frame_shift": 80,
         "fft_size": 256,
-    }
+    }    
+    hybrid_nn_system = get_hybrid_nn_system(context_window=441)
     nn_args = get_nn_args_baseline(
         nn_base_args={
             "lm80_fft256": dict(
-                returnn_args={"batch_size": 5000},
+                returnn_args={
+                    "batch_size": 5000,
+                    },
                 feature_args=log_mel_args_8khz,
             ),
         },
         num_epochs=125,
         prefix="bs5k_",
+        datasets=hybrid_nn_system.datasets,
     )
     nn_steps = RasrSteps()
     nn_steps.add_step("nn", nn_args)
-    hybrid_nn_system = get_hybrid_nn_system(context_window=441)
     hybrid_nn_system.run(nn_steps)
     for train_job in hybrid_nn_system.jobs["train-clean-100.train_train-clean-100.cv"].values():
         # noinspection PyUnresolvedReferences
