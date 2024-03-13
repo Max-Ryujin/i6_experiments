@@ -125,7 +125,6 @@ def get_rc_returnn_configs(
         },
         **datasets,
     }
-    ipdb.set_trace()
     base_post_config = {
         "use_tensorflow": True,
         "debug_print_layer_output_template": True,

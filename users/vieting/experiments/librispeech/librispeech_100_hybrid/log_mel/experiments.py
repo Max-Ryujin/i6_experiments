@@ -59,7 +59,6 @@ def get_hybrid_nn_system(
         train_cv_pairing=[tuple(["train-clean-100.train", "train-clean-100.cv"])],
     )
     hybrid_nn_system.datasets = data
-    ipdb.set_trace()
     return hybrid_nn_system
 
 
