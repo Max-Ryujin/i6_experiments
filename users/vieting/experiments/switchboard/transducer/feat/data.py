@@ -130,6 +130,7 @@ def get_switchboard_data():
 
 
 def get_returnn_base_data(
+    pre_process=False,
     partition_epoch: Optional[Dict[str, int]] = None,
     context_window: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Union[OggZipHdfDataInput, Dict[str, OggZipHdfDataInput]]]:
@@ -158,6 +159,8 @@ def get_returnn_base_data(
         "features": "raw",
         "peak_normalization": True
     }
+    if pre_process:
+        audio["pre_process"] = pre_process
     ogg_zip_base_args = dict(
         oggzip_files=[ogg_zip_job.out_ogg_zip],
         alignments=[],
@@ -197,7 +200,7 @@ def get_returnn_base_data(
     return returnn_datasets
 
 
-def get_returnn_ogg_datasets(**kwargs) -> Dict[str, Dict]:
+def get_returnn_ogg_datasets(use_multi_proc_dataset=False, **kwargs) -> Dict[str, Dict]:
     """
     Get only ogg input datasets without targets.
     """
@@ -207,6 +210,13 @@ def get_returnn_ogg_datasets(**kwargs) -> Dict[str, Dict]:
         "dev": returnn_datasets["dev"].get_data_dict()["datasets"]["ogg"],
         "eval_datasets": {"devtrain": returnn_datasets["eval_datasets"]["devtrain"].get_data_dict()["datasets"]["ogg"]},
     }
+    if use_multi_proc_dataset:
+        returnn_datasets["train"] = {
+            "class": "MultiProcDataset",
+            "dataset": returnn_datasets["train"],
+            "num_workers": 2,
+            "buffer_size": 5,
+        }
     return returnn_datasets
 
 

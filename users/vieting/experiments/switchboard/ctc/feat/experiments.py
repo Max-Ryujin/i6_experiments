@@ -23,8 +23,8 @@ from .baseline_args import get_nn_args as get_nn_args_baseline
 from .default_tools import RASR_BINARY_PATH, RETURNN_ROOT, RETURNN_EXE, SCTK_BINARY_PATH
 
 
-def get_datasets():
-    returnn_datasets = get_returnn_ogg_datasets()
+def get_datasets(**kwargs):
+    returnn_datasets = get_returnn_ogg_datasets(**kwargs)
     train_corpus, dev_corpora, segments = get_switchboard_data()
     rasr_loss_lexicon = train_corpus.lexicon["filename"]
     rasr_loss_corpus = train_corpus.corpus_object.corpus_file
@@ -615,20 +615,41 @@ def run_mel_baseline():
         dev_corpora,
     ) = get_datasets()
     returnn_args = {
-        "batch_size": 10000,
+        "batch_size": 5000,
         "rasr_binary_path": RASR_BINARY_PATH,
         "rasr_loss_corpus_path": rasr_loss_corpus_path,
         "rasr_loss_corpus_segments": rasr_loss_corpus_segments,
         "rasr_loss_lexicon_path": rasr_loss_lexicon_path,
         "datasets": returnn_datasets,
+        "extra_args": {
+            "accum_grad_multiple_step": 2,
+        },
     }
-    feature_args = {"class": "LogMelNetwork", "wave_norm": True, "frame_size": 200, "frame_shift": 80, "fft_size": 256}
 
     nn_args, report_args_collection = get_nn_args_baseline(
         nn_base_args={
+            "lgm80_baseline_pre": dict(
+                returnn_args={"conformer_type": "wei", "specaug_old": {"max_feature": 8}, **returnn_args},
+                feature_args={"class": "LogMelNetwork", "preemphasis": 0.97, "wave_norm": True, "frame_size": 200, "frame_shift": 80, "fft_size": 256},
+                lr_args={
+                    "peak_lr": 4e-4,
+                    "start_lr": 1.325e-05,
+                    "end_lr": 1e-5,
+                    "increase_epochs": 180,
+                    "decrease_epochs": 180,
+                    "final_epochs": 0,
+                },
+                report_args={
+                    "architecture": "conf-wei",
+                    "lr": "wei_peak_4e-4_e450_cycle360",
+                    "specaug": "wei_adapt_80dim",
+                    "wave_norm": "True",
+                    "preemphasis": "0.97",
+                },
+            ),
             "lgm80_baseline": dict(
                 returnn_args={"conformer_type": "wei", "specaug_old": {"max_feature": 8}, **returnn_args},
-                feature_args=feature_args,
+                feature_args={"class": "LogMelNetwork", "wave_norm": True, "frame_size": 200, "frame_shift": 80, "fft_size": 256},
                 lr_args={
                     "peak_lr": 4e-4,
                     "start_lr": 1.325e-05,
@@ -646,11 +667,186 @@ def run_mel_baseline():
             ),
         },
         num_epochs=450,
-        prefix="conformer_bs10k_",
+        evaluation_epochs=[400, 450],
+        prefix="conformer_bs2x5k_",
     )
-    report, ctc_nn_system = run_nn_args(nn_args, report_args_collection, dev_corpora)
-    return report, ctc_nn_system
+    report = run_nn_args(
+        nn_args,
+        report_args_collection,
+        dev_corpora,
+        "report_lgm_baseline.csv",
+        recog_args={"epochs": [350, 400, 450, "best"]},
+    )
+    return report
 
+def run_scf_baseline_decaying_batchsize():
+    gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/switchboard/ctc/feat/"
+
+    (
+        returnn_datasets,
+        rasr_loss_corpus_path,
+        rasr_loss_corpus_segments,
+        rasr_loss_lexicon_path,
+        dev_corpora,
+    ) = get_datasets()
+    returnn_args = {
+        "batch_size": 5000,
+        "rasr_binary_path": RASR_BINARY_PATH,
+        "rasr_loss_corpus_path": rasr_loss_corpus_path,
+        "rasr_loss_corpus_segments": rasr_loss_corpus_segments,
+        "rasr_loss_lexicon_path": rasr_loss_lexicon_path,
+        "datasets": returnn_datasets,
+        "extra_args": {
+            "conv_pad_seq_len_to_power": 1.5,        },
+        "conformer_type": "wei",
+        "specaug_old": {"max_feature": 15},
+    }
+    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2, "preemphasis": 0.97, "wave_norm": True}
+
+    nn_args, report_args_collection = get_nn_args_baseline(
+        nn_base_args={
+            "scf_baseline": dict(
+                returnn_args=returnn_args,
+                feature_args=feature_args,
+                lr_args={
+                    "peak_lr": 4e-4,
+                    "start_lr": 1.325e-05,
+                    "end_lr": 1e-5,
+                    "increase_epochs": 180,
+                    "decrease_epochs": 180,
+                    "final_epochs": 0,
+                },
+                report_args={
+                    "architecture": "conf-wei",
+                    "lr": "wei_peak_4e-4_e450_cycle360",
+                    "specaug": "wei_adapt_80dim",
+                    "wave_norm": "True",
+                    "preemphasis": "0.97",
+                    "deacy_epochs": "8_10000_5000",
+                },
+            ),
+        },
+        num_epochs=450,
+        evaluation_epochs=[350, 400, 450],
+        prefix="conformer_bs5k_decay_",
+    )
+    report = run_nn_args(nn_args, report_args_collection, dev_corpora)
+    return report
+
+def run_scf_frozen_features():
+    gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/switchboard/ctc/feat/"
+
+    (
+        returnn_datasets,
+        rasr_loss_corpus_path,
+        rasr_loss_corpus_segments,
+        rasr_loss_lexicon_path,
+        dev_corpora,
+    ) = get_datasets()
+    returnn_args = {
+        "batch_size": 5000,
+        "rasr_binary_path": RASR_BINARY_PATH,
+        "rasr_loss_corpus_path": rasr_loss_corpus_path,
+        "rasr_loss_corpus_segments": rasr_loss_corpus_segments,
+        "rasr_loss_lexicon_path": rasr_loss_lexicon_path,
+        "datasets": returnn_datasets, 
+        "conformer_type": "wei",
+        "specaug_old": {"max_feature": 15},
+    }
+    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2, "preemphasis": 0.97, "wave_norm": True}
+
+    nn_args, report_args_collection = get_nn_args_baseline(
+        nn_base_args={
+            "scf_baseline": dict(
+                returnn_args={
+                "staged_opts": {
+                    1: "freeze_features",
+                    16: "unfreeze_features",
+                },
+                "extra_args": {
+                    "accum_grad_multiple_step": 2,
+                    "conv_pad_seq_len_to_power": 1.5,
+                    "preload_from_files": {
+                        "existing-model": {
+                            "filename": "/u/maximilian.kannen/setups/20230406_feat/work/i6_core/returnn/training/ReturnnTrainingJob.xUBplWqSsRII/output/models/epoch.016.index",
+                            "init_for_train": True,
+                            "var_name_mapping": {
+                                "/conv_h_filter/conv_h_filter": "features/conv_h_filter/conv_h_filter",
+                                "/conv_l/W": "features/conv_l/W",
+                                "/conv_l_act/bias": "features/conv_l_act/bias",
+                                "/conv_l_act/scale": "features/conv_l_act/scale",
+                            },
+                            "prefix": "features",
+                        },
+                    },
+                },
+                **returnn_args,
+                },
+                feature_args=feature_args,
+                lr_args={
+                    "peak_lr": 4e-4,
+                    "start_lr": 1.325e-05,
+                    "end_lr": 1e-5,
+                    "increase_epochs": 180,
+                    "decrease_epochs": 180,
+                    "final_epochs": 0,
+                },
+                report_args={
+                    "architecture": "conf-wei",
+                    "lr": "wei_peak_4e-4_e450_cycle360",
+                    "specaug": "wei_adapt_80dim",
+                    "wave_norm": "True",
+                    "preemphasis": "0.97",
+                },
+            ),
+            "epoch_256_freezing": dict(
+                returnn_args={
+                "staged_opts": {
+                    256: "freeze_features",
+                },
+                "extra_args": {
+                    "accum_grad_multiple_step": 2,
+                    "conv_pad_seq_len_to_power": 1.5,
+                },
+                **returnn_args,
+            },
+                feature_args=feature_args,
+                lr_args={
+                    "peak_lr": 4e-4,
+                    "start_lr": 1.325e-05,
+                    "end_lr": 1e-5,
+                    "increase_epochs": 180,
+                    "decrease_epochs": 180,
+                    "final_epochs": 0,
+                },
+                report_args={
+                    "architecture": "conf-wei",
+                    "lr": "wei_peak_4e-4_e450_cycle360",
+                    "specaug": "wei_adapt_80dim",
+                    "wave_norm": "True",
+                    "preemphasis": "0.97",
+                },
+            ),
+        },
+        num_epochs=450,
+        evaluation_epochs=[350, 400, 450],
+        prefix="conformer_bs2x5k_frozen_features_",
+    )
+
+    returnn_root = CloneGitRepositoryJob(
+        "https://github.com/rwth-i6/returnn",
+        commit="c4d36d06f6465e82a50d400d114259e07b8b0709",
+    ).out_repository
+    returnn_root.hash_overwrite = "returnn_conv_padding"
+    report = run_nn_args(
+        nn_args,
+        report_args_collection,
+        dev_corpora,
+        "report_scf_frozen_features.csv",
+        returnn_root=returnn_root,
+        recog_args={"epochs": [350, 400, 450, "best"]},
+    )
+    return report
 
 def run_scf_baseline():
     gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/switchboard/ctc/feat/"
@@ -673,34 +869,48 @@ def run_scf_baseline():
             "accum_grad_multiple_step": 2,
             "watch_memory": True,
             "conv_pad_seq_len_to_power": 1.5,
+            "dummy": 1, # dummy arg to make sure that the hash is different
         },
         "conformer_type": "wei",
         "specaug_old": {"max_feature": 15},
     }
-    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2}
+    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2, "preemphasis": 0.97, "wave_norm": True}
 
     nn_args, report_args_collection = get_nn_args_baseline(
         nn_base_args={
-            "bs2x5k_scf_baseline": dict(
-                returnn_args=returnn_args,
-                feature_args=feature_args,
-                lr_args=lr_args,
-                report_args={"batch_size": "2x5k"},
-            ),
-            "bs7k_scf_baseline": dict(
+            "scf_baseline": dict(
                 returnn_args={
                     **returnn_args,
-                    "batch_size": 7000,
-                    "extra_args": {"watch_memory": True, "conv_pad_seq_len_to_power": 1.5},
                 },
                 feature_args=feature_args,
-                lr_args=lr_args,
-                report_args={"batch_size": "7k"},
+                lr_args={
+                    "peak_lr": 4e-4,
+                    "start_lr": 1.325e-05,
+                    "end_lr": 1e-5,
+                    "increase_epochs": 180,
+                    "decrease_epochs": 180,
+                    "final_epochs": 0,
+                },
+                report_args={
+                    "architecture": "conf-wei",
+                    "lr": "wei_peak_4e-4_e450_cycle360",
+                    "specaug": "wei_adapt_80dim",
+                    "wave_norm": "True",
+                    "preemphasis": "0.97",
+                },
             ),
         },
         num_epochs=450,
         evaluation_epochs=[350, 400, 450],
-        prefix="conformer_",
+        prefix="conformer_bs2x5k_baseline",
+    )
+
+
+    nn_args, report_args_collection = get_nn_args_baseline(
+        nn_base_args=nn_base_args,
+        num_epochs=450,
+        evaluation_epochs=[350, 400, 450],
+        prefix="conformer_bs2x5k_",
     )
 
     returnn_root = CloneGitRepositoryJob(
@@ -708,7 +918,7 @@ def run_scf_baseline():
         commit="c4d36d06f6465e82a50d400d114259e07b8b0709",
     ).out_repository
     returnn_root.hash_overwrite = "returnn_conv_padding"
-    report, ctc_nn_system = run_nn_args(
+    report = run_nn_args(
         nn_args,
         report_args_collection,
         dev_corpora,
@@ -740,7 +950,7 @@ def run_scf_audio_perturbation():
         "audio_perturbation": True,
         "use_multi_proc_dataset": True,
     }
-    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2}
+    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2, "wave_norm": True, "preemphasis_first": True} # "preemphasis": 0.97,
     lr_args = {
         "peak_lr": 4e-4,
         "start_lr": 1.325e-05,
@@ -750,236 +960,51 @@ def run_scf_audio_perturbation():
         "final_epochs": 0,
     }
 
+   # perturbation_args = [
+    #    {"speed": {"prob": 0.6, "minimum": 0.88, "maximum": 1.12}},
+     #   {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+      #  {"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
+       # {"speed": {"prob": 0.5, "minimum": 0.88, "maximum": 1.12}},
+        #{"speed": {"prob": 0.4, "minimum": 0.88, "maximum": 1.12}},
+    #    {"tempo": {"prob": 0.4, "minimum": 0.83, "maximum": 1.17}},
+     #   {"tempo": {"prob": 0.5, "minimum": 0.83, "maximum": 1.17}},
+      #  {"tempo": {"prob": 0.6, "minimum": 0.83, "maximum": 1.17}},
+       # {"tempo": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
+        #{"tempo": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+    #    {"preemphasis": {"prob": 0.9, "minimum": 0.9, "maximum": 1.0}},
+     #   {"preemphasis": {"prob": 0.9, "minimum": 0.95, "maximum": 1.0}},
+      #  {"codecs": [{"encoding": "ULAW", "prob": 0.4}], "preemphasis": {"prob": 1, "minimum": 0.97, "maximum": 0.97}},
+       # {"codecs": [{"encoding": "ULAW", "prob": 0.6}]},
+        #{"codecs": [{"encoding": "ULAW", "prob": 0.8}]},
+    #    {"non_linearity": {"prob": 0.4, "minimum": 0.9, "maximum": 1.1}},
+     #   {"non_linearity": {"prob": 0.4, "minimum": 0.8, "maximum": 1.2}},
+      #  {"non_linearity": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
+       # {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+    #]
+    # second run
+   # perturbation_args = [
+    #    {"codecs": [{"encoding": "ULAW","prob": 0.3}]},
+     #   {"codecs": [{"encoding": "ULAW","prob": 0.5}]},
+      #  {"codecs": [{"encoding": "ULAW","prob": 0.7}]},
+       # {"tempo": {"prob": 0.3, "minimum": 0.83, "maximum": 1.17}},
+     #   {"tempo": {"prob": 0.8, "minimum": 0.83, "maximum": 1.17}},
+      #  {"tempo": {"prob": 0.3, "minimum": 0.7, "maximum": 1.3}},
+       # {"tempo": {"prob": 0.8, "minimum": 0.7, "maximum": 1.3}},
+       # {"speed": {"prob": 0.5, "minimum": 0.88, "maximum": 1.12}},
+     #   {"speed": {"prob": 0.3, "minimum": 0.88, "maximum": 1.12}},
+      #  {"speed": {"prob": 0.7, "minimum": 0.88, "maximum": 1.12}},
+       # {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+        #{"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
+     #   {"non_linearity": {"prob": 0.7, "minimum": 0.9, "maximum": 1.1}},
+      #  {"non_linearity": {"prob": 0.3, "minimum": 0.9, "maximum": 1.1}},
+   # ]
+
+
+    # seperated because the training needs a different network without preemphasis
     perturbation_args = [
-        {"speed": {"prob": 0.6, "minimum": 0.88, "maximum": 1.12}},
-        {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
-        {"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"speed": {"prob": 0.5, "minimum": 0.88, "maximum": 1.12}},
-        {"speed": {"prob": 0.4, "minimum": 0.88, "maximum": 1.12}},
-        {"tempo": {"prob": 0.4, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.5, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.6, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"tempo": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
-        {"preemphasis": {"prob": 0.9, "minimum": 0.9, "maximum": 1.0}},
-        {"preemphasis": {"prob": 1.0, "minimum": 1.0, "maximum": 1.0}},
-        {"codecs": [{"encoding": "ULAW", "prob": 0.4}]},
-        {"codecs": [{"encoding": "ULAW", "prob": 0.6}]},
-        {"non_linearity": {"prob": 0.4, "minimum": 0.9, "maximum": 1.1}},
-        {"non_linearity": {"prob": 0.4, "minimum": 0.8, "maximum": 1.2}},
-        {"non_linearity": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
-    ]
-
-    def process_args(args: Dict[str, Any]):
-        """
-        Process the argument dictionary to generate a key string and a report string.
-
-        Returns:
-            tuple: A tuple containing the key string and the report string.
-        """
-
-        key_string = ""
-        report_dict = {}
-
-        for key, value in args.items():
-
-            if key in ["speed", "tempo", "preemphasis", "non_linearity"]:
-                key_component = f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}"
-                key_string += key_component
-                report_dict[key] = f"{value['prob']}_{value['minimum']}_{value['maximum']}"
-            elif key == "codecs":
-                codecs_str = "_".join([f"{codec['encoding']}_{codec['prob']}" for codec in value])
-                key_string += f"{key}_{codecs_str}_"
-                report_dict[key] = codecs_str
-            else:
-                raise ValueError(f"Unknown argument name: {key}")
-
-        return key_string, report_dict
-
-    nn_base_args = {}
-
-    for args in perturbation_args:
-        arg_key = list(args.keys())[0]
-        arg_values = list(args.values())[0]
-
-        # Check if arg_values is a dictionary (has 'minimum' and 'maximum') or a list (like 'codecs')
-        if isinstance(arg_values, dict):
-            key_suffix = f"{arg_key}_{arg_values['prob']}_{arg_values['minimum']}_{arg_values['maximum']}_"
-            report_values = f"{arg_key}: '{arg_values['prob']}_{arg_values['minimum']}_{arg_values['maximum']}'"
-        elif isinstance(arg_values, list):
-            key_suffix = f"{arg_key}_{arg_values[0]['encoding']}_{arg_values[0]['prob']}_"
-            report_values = f"{arg_key} (encoding: {arg_values[0]['encoding']}): '{arg_values[0]['prob']}'"
-
-        # Construct the key and report_args
-        key = f"scf_bs2x5k_perturb_{key_suffix}"
-        report_args = {key: report_values}
-        nn_base_args[key] = dict(
-            returnn_args={
-                "extra_args": {
-                    "audio_perturb_args": audio_perturb_args,
-                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
-                    "conv_pad_seq_len_to_power": 1.5,
-                    "watch_memory": True,
-                    "accum_grad_multiple_step": 2,
-                },
-                **returnn_args,
-            },
-            feature_args=feature_args,
-            lr_args=lr_args,
-            report_args=report_args,
-        )
-
-    for tempo in tempos:
-        key_suffix = f"tempo_{tempo['prob']}_{tempo['minimum']}_{tempo['maximum']}"
-        key = f"scf_bs2x5k_perturb_{key_suffix}"
-        audio_perturb_args = {"tempo": tempo}
-        report_args = {"tempo": f"{tempo['prob']}_{tempo['minimum']}_{tempo['maximum']}"}
-        nn_base_args[key] = dict(
-            returnn_args={
-                "extra_args": {
-                    "audio_perturb_args": audio_perturb_args,
-                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
-                    "conv_pad_seq_len_to_power": 1.5,
-                    "accum_grad_multiple_step": 2,
-                },
-                **returnn_args,
-            },
-            feature_args=feature_args,
-            lr_args=lr_args,
-            report_args=report_args,
-        )
-
-    for preemphasis in preemphases:
-        key_suffix = f"preemphasis_{preemphasis['prob']}_{preemphasis['minimum']}_{preemphasis['maximum']}"
-        key = f"scf_bs2x5k_perturb_{key_suffix}"
-        audio_perturb_args = {"preemphasis": preemphasis}
-        report_args["preemphasis"] = f"{preemphasis['prob']}_{preemphasis['minimum']}_{preemphasis['maximum']}"
-        nn_base_args[key] = dict(
-            returnn_args={
-                "extra_args": {
-                    "audio_perturb_args": audio_perturb_args,
-                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
-                    "conv_pad_seq_len_to_power": 1.5,
-                    "accum_grad_multiple_step": 2,
-                },
-                **returnn_args,
-            },
-            feature_args=feature_args,
-            lr_args=lr_args,
-            report_args=report_args,
-        )
-
-    for codec in codecs:
-        key_suffix = f"codec_wav_{codec['encoding'].lower()}_{codec['prob']}"
-        key = f"scf_bs2x5k_perturb_{key_suffix}"
-        audio_perturb_args = {"codecs": [codec]}
-        report_args["codec"] = f"wav_{codec['encoding'].lower()}_{codec['prob']}"
-        nn_base_args[key] = dict(
-            returnn_args={
-                "extra_args": {
-                    "audio_perturb_args": audio_perturb_args,
-                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
-                    "conv_pad_seq_len_to_power": 1.5,
-                    "accum_grad_multiple_step": 2,
-                },
-                **returnn_args,
-            },
-            feature_args=feature_args,
-            lr_args=lr_args,
-            report_args=report_args,
-        )
-
-    for non_linearity in non_linearities:
-        key_suffix = f"non_linearity_{non_linearity['prob']}_{non_linearity['alpha']}"
-        key = f"scf_bs2x5k_perturb_{key_suffix}"
-        audio_perturb_args = {"non_linearities": [non_linearity]}
-        report_args["non_linearity"] = f"{non_linearity['prob']}_{non_linearity['alpha']}"
-        nn_base_args[key] = dict(
-            returnn_args={
-                "extra_args": {
-                    "audio_perturb_args": audio_perturb_args,
-                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
-                    "conv_pad_seq_len_to_power": 1.5,
-                    "accum_grad_multiple_step": 2,
-                },
-                **returnn_args,
-            },
-            feature_args=feature_args,
-            lr_args=lr_args,
-            report_args=report_args,
-        )
-
-    nn_args, report_args_collection = get_nn_args_baseline(
-        nn_base_args=nn_base_args,
-        num_epochs=450,
-        evaluation_epochs=[350, 400, 450],
-        prefix="conformer_",
-    )
-
-    returnn_root = CloneGitRepositoryJob(
-        "https://github.com/rwth-i6/returnn",
-        commit="c4d36d06f6465e82a50d400d114259e07b8b0709",
-    ).out_repository
-    returnn_root.hash_overwrite = "returnn_conv_padding"
-    report, ctc_nn_system = run_nn_args(
-        nn_args, report_args_collection, dev_corpora, returnn_root=returnn_root,
-        recog_args={"epochs": [350, 400, 450, "best"]},
-    )
-    return report
-
-
-def run_scf_audio_perturbation():
-    gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/switchboard/ctc/feat/"
-
-    (
-        returnn_datasets,
-        rasr_loss_corpus_path,
-        rasr_loss_corpus_segments,
-        rasr_loss_lexicon_path,
-        dev_corpora,
-    ) = get_datasets(use_multi_proc_dataset=True, pre_process=CodeWrapper("audio_perturb_runner.run"))
-    returnn_args = {
-        "batch_size": 5000,
-        "rasr_binary_path": RASR_BINARY_PATH,
-        "rasr_loss_corpus_path": rasr_loss_corpus_path,
-        "rasr_loss_corpus_segments": rasr_loss_corpus_segments,
-        "rasr_loss_lexicon_path": rasr_loss_lexicon_path,
-        "datasets": returnn_datasets,
-        "conformer_type": "wei",
-        "specaug_old": {"max_feature": 15},
-        "audio_perturbation": True,
-        "use_multi_proc_dataset": True,
-    }
-    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2}
-    lr_args = {
-        "peak_lr": 4e-4,
-        "start_lr": 1.325e-05,
-        "end_lr": 1e-5,
-        "increase_epochs": 180,
-        "decrease_epochs": 180,
-        "final_epochs": 0,
-    }
-
-    perturbation_args = [
-        {"speed": {"prob": 0.6, "minimum": 0.88, "maximum": 1.12}},
-        {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
-        {"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"speed": {"prob": 0.5, "minimum": 0.88, "maximum": 1.12}},
-        {"speed": {"prob": 0.4, "minimum": 0.88, "maximum": 1.12}},
-        {"tempo": {"prob": 0.4, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.5, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.6, "minimum": 0.83, "maximum": 1.17}},
-        {"tempo": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"tempo": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
-        {"preemphasis": {"prob": 0.9, "minimum": 0.9, "maximum": 1.0}},
-        {"preemphasis": {"prob": 1.0, "minimum": 1.0, "maximum": 1.0}},
-        {"codecs": [{"encoding": "ULAW", "prob": 0.4}]},
-        {"codecs": [{"encoding": "ULAW", "prob": 0.6}]},
-        {"non_linearity": {"prob": 0.4, "minimum": 0.9, "maximum": 1.1}},
-        {"non_linearity": {"prob": 0.4, "minimum": 0.8, "maximum": 1.2}},
-        {"non_linearity": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
-        {"non_linearity": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+        {"preemphasis": {"prob": 1, "minimum": 0.9, "maximum": 1}},
+        {"preemphasis": {"prob": 0.7, "minimum": 0.9, "maximum": 1}},
+        {"preemphasis": {"prob": 0.3, "minimum": 0.9, "maximum": 1}},
     ]
 
     def process_args(args: Dict[str, Any]):
@@ -1014,7 +1039,7 @@ def run_scf_audio_perturbation():
         exp_name_suffix, report_dict = process_args(args)
 
         # Construct the exp_name and report_args
-        exp_name = f"scf_bs2x5k_perturb_{exp_name_suffix}"
+        exp_name = f"scf_bs2x5k_perturb_v4_{exp_name_suffix}"
         report_args = report_dict
         nn_base_args[exp_name] = dict(
             returnn_args={
@@ -1048,6 +1073,126 @@ def run_scf_audio_perturbation():
         nn_args,
         report_args_collection,
         dev_corpora,
+        report_name="report_scf_audio_perturbation_preemphasis_1.csv",
+        returnn_root=returnn_root,
+        recog_args={"epochs": [350, 400, 450, "best"]},
+    )
+    return report
+
+
+def run_scf_audio_perturbation_from_checkpoint():
+    gs.ALIAS_AND_OUTPUT_SUBDIR = "experiments/switchboard/ctc/feat/"
+
+    (
+        returnn_datasets,
+        rasr_loss_corpus_path,
+        rasr_loss_corpus_segments,
+        rasr_loss_lexicon_path,
+        dev_corpora,
+    ) = get_datasets(use_multi_proc_dataset=True, pre_process=CodeWrapper("audio_perturb_runner.run"))
+    returnn_args = {
+        "batch_size": 5000,
+        "rasr_binary_path": RASR_BINARY_PATH,
+        "rasr_loss_corpus_path": rasr_loss_corpus_path,
+        "rasr_loss_corpus_segments": rasr_loss_corpus_segments,
+        "rasr_loss_lexicon_path": rasr_loss_lexicon_path,
+        "datasets": returnn_datasets,
+        "conformer_type": "wei",
+        "specaug_old": {"max_feature": 15},
+        "audio_perturbation": True,
+        "use_multi_proc_dataset": True,
+    }
+    feature_args = {"class": "ScfNetwork", "size_tf": 256 // 2, "stride_tf": 10 // 2}
+    lr_args = {
+        "peak_lr": 4e-4,
+        "start_lr": 1.325e-05,
+        "end_lr": 1e-5,
+        "increase_epochs": 180,
+        "decrease_epochs": 180,
+        "final_epochs": 0,
+    }
+
+    perturbation_args = [
+        {"speed": {"prob": 0.6, "minimum": 0.88, "maximum": 1.12}},
+        {"speed": {"prob": 0.6, "minimum": 0.8, "maximum": 1.2}},
+        {"speed": {"prob": 0.6, "minimum": 0.9, "maximum": 1.1}},
+        {"speed": {"prob": 0.5, "minimum": 0.88, "maximum": 1.12}},
+        {"speed": {"prob": 0.4, "minimum": 0.88, "maximum": 1.12}},
+    ]
+
+    def process_args(args: Dict[str, Any]):
+        """
+        Process the argument dictionary to generate a key string and a report string.
+
+        Returns:
+            tuple: A tuple containing the key string and the report string.
+        """
+
+        key_string = ""
+        report_dict = {}
+
+        for key, value in args.items():
+
+            if key in ["speed", "tempo", "preemphasis", "non_linearity"]:
+                key_component = f"{key}_{value['prob']}_{value['minimum']}_{value['maximum']}"
+                key_string += key_component
+                report_dict[key] = f"{value['prob']}_{value['minimum']}_{value['maximum']}"
+            elif key == "codecs":
+                codecs_str = "_".join([f"{codec['encoding']}_{codec['prob']}" for codec in value])
+                key_string += f"{key}_{codecs_str}_"
+                report_dict[key] = codecs_str
+            else:
+                raise ValueError(f"Unknown argument name: {key}")
+
+        return key_string, report_dict
+
+    nn_base_args = {}
+
+    for args in perturbation_args:
+        exp_name_suffix, report_dict = process_args(args)
+
+        # Construct the exp_name and report_args
+        exp_name = f"scf_bs2x5k_perturb_from_checkpoint10_{exp_name_suffix}"
+        report_args = report_dict
+        nn_base_args[exp_name] = dict(
+            returnn_args={
+                "extra_args": {
+                    "audio_perturb_args": args,
+                    "audio_perturb_runner": CodeWrapper("WaveformPerturbation(**audio_perturb_args)"),
+                    "conv_pad_seq_len_to_power": 1.5,
+                    "watch_memory": True,
+                    "accum_grad_multiple_step": 2,
+                     "preload_from_files": {
+                        "existing-model": {
+                            "filename": "/u/maximilian.kannen/setups/20230406_feat/work/i6_core/returnn/training/ReturnnTrainingJob.Bub5DKvc6RBi/output/models/epoch.010.index",  # your checkpoint file, mandatory
+                            "init_for_train": True,
+                        }
+        }
+                },
+                **returnn_args,
+            },
+            feature_args=feature_args,
+            lr_args=lr_args,
+            report_args=report_args,
+        )
+
+    nn_args, report_args_collection = get_nn_args_baseline(
+        nn_base_args=nn_base_args,
+        num_epochs=450,
+        evaluation_epochs=[350, 400, 450],
+        prefix="conformer_",
+    )
+
+    returnn_root = CloneGitRepositoryJob(
+        "https://github.com/rwth-i6/returnn",
+        commit="c4d36d06f6465e82a50d400d114259e07b8b0709",
+    ).out_repository
+    returnn_root.hash_overwrite = "returnn_conv_padding"
+    report = run_nn_args(
+        nn_args,
+        report_args_collection,
+        dev_corpora,
+        "report_scf_audio_perturbation_from_checkpoint10.csv",
         returnn_root=returnn_root,
         recog_args={"epochs": [350, 400, 450, "best"]},
     )

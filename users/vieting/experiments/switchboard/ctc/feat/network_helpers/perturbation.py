@@ -60,13 +60,19 @@ class WaveformPerturbation:
             - 'prob' (float): The probability of applying the non-linearity filter.
             - 'minimum' (float): The minimum non-linearity exponent.
             - 'maximum' (float): The maximum non-linearity exponent.
+        :param non_linearity: A dictionary containing parameters for the non-linearity filter.
+            - 'prob' (float): The probability of applying the non-linearity filter.
+            - 'minimum' (float): The minimum non-linearity factor.
+            - 'maximum' (float): The maximum non-linearity factor.
         """
         import functools
+
 
         self._speed = PerturbationFactor(**speed) if speed else None
         self._tempo = PerturbationFactor(**tempo) if tempo else None
         self._sox_effects = sox_effects or []
         self._perturbations = []
+        self.non_linearity = non_linearity
         self.non_linearity = non_linearity
         if preemphasis:
             self._perturbations.append(functools.partial(self.preemphasis, factor=PerturbationFactor(**preemphasis)))
@@ -76,6 +82,8 @@ class WaveformPerturbation:
             self._perturbations.append(
                 functools.partial(self.non_linearity_function, factor=PerturbationFactor(**non_linearity))
             )
+        if non_linearity:
+            self._perturbations.append(functools.partial(self.non_linearity_function, factor=PerturbationFactor(**non_linearity)))
 
     def run(self, audio, sample_rate, random_state):
         import numpy as np
@@ -123,22 +131,16 @@ class WaveformPerturbation:
 
     @staticmethod
     def apply_codecs(audio, sample_rate, random_state, codecs):
+        import numpy as np
         for codec in codecs:
             prob = codec.pop("prob", 1.0)
             if random_state.random() < prob:
                 if codec.get("encoding") == "ULAW":
-                    # standard values for µ-law encoding
-                    quantization_bits = 8
+                    # standard value for mu-law encoding
                     mu = 255.0
 
                     # mu-law encoding formula
-                    encoded_audio = np.sign(audio) * np.log1p(mu * np.abs(audio)) / np.log1p(mu)
-                    encoded_audio = ((encoded_audio + 1) / 2 * (2**quantization_bits - 1)).astype(np.float64)
-
-                    # normalize encoded audio to -1 to 1
-                    encoded_normalized_audio = (encoded_audio / (2**quantization_bits - 1) * 2) - 1
-
-                    audio = encoded_normalized_audio
+                    audio = np.sign(audio) * np.log1p(mu * np.abs(audio)) / np.log1p(mu)
                 else:
                     raise NotImplementedError(f"Codec {codec} not implemented.")
         return audio
