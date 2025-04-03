@@ -126,7 +126,7 @@ def add_specaug_layer(
             "from": from_list,
             "eval": f"self.network.get_config().typed_value('transform_with_filter_masking')(source(0, as_data=True), network=self.network, **{full_config})",
         }
-        return [name], [
+        return_methods = [
             sort_filters_by_center_freq,
             get_frequency_response,
             transform_with_filter_masking,
@@ -140,21 +140,32 @@ def add_specaug_layer(
             "from": from_list,
             "eval": f"self.network.get_config().typed_value('transform')(source(0, as_data=True), network=self.network, **{full_config})",
         }
-        return [name], [
+        return_methods = [
             sort_filters_by_center_freq,
             _mask,
             random_mask,
             transform,
         ]
 
+    return [name], return_methods
 
-def filter_based_masking(x, batch_axis, axis, probability_distribution, max_number_masks_for_probability_specaug):
+
+def filter_based_masking(
+    x,
+    batch_axis,
+    axis,
+    probability_distribution,
+    max_number_masks_for_probability_specaug,
+):
     """
-    :param tf.Tensor x: (batch,time,feature)
-    :param int batch_axis:
-    :param int axis:
-    :param tf.Tensor probability_distribution:
-    :param int max_number_masks_for_probability_specaug:
+    Applies feature masking based on a probability distribution.
+
+    :param tf.Tensor x: Input tensor.
+    :param int batch_axis: The index of the batch dimension.
+    :param int axis: The axis along which to apply the mask.
+    :param tf.Tensor probability_distribution: Probability distribution for selecting features to mask.
+    :param int max_number_masks_for_probability_specaug: Maximum number of masks to apply per batch.
+    :return: Tensor with features masked.
     """
     import tensorflow as tf
 
@@ -164,44 +175,77 @@ def filter_based_masking(x, batch_axis, axis, probability_distribution, max_numb
 
     # Random number of masks for each batch  shape: (n_batch,)
     num_masks = tf.random.uniform(
-        shape=[n_batch], minval=0, maxval=max_number_masks_for_probability_specaug + 1, dtype=tf.int32
+        shape=[n_batch],
+        minval=0,
+        maxval=max_number_masks_for_probability_specaug + 1,
+        dtype=tf.int32,
     )
-    # Total number of masks to generate across all batches
+
+    # Total number of masks across all batches
     total_masks = tf.reduce_sum(num_masks)
 
-    # Sample feature indices to be masked based on the probability distribution (categorical needs 2d) shape: (1, total_masks)
+    # Sample feature indices to be masked based on the probability distribution
     logits = tf.math.log(probability_distribution)
     masked_features = tf.random.categorical(tf.expand_dims(logits, 0), total_masks)
-    # Generate batch offsets to map the masks to the corresponding batches. example: [0,0,1,2,2,2]
+    masked_features = tf.reshape(tf.cast(masked_features, tf.int32), [-1])
+
+    # Generate batch indices to map masks to corresponding batches
     batch_indices = tf.repeat(tf.range(n_batch), num_masks)
 
-    # Gather the selected feature indices (have to match the shape)
-    feature_indices = tf.gather(tf.reshape(masked_features, [-1]), tf.range(total_masks))  # shape: (total_masks,)
-    feature_indices = tf.reshape(tf.cast(feature_indices, tf.int32), [-1])  # shape: (total_masks,)
+    # Adjust indices and mask shape based on the order of batch_axis and axis
+    if batch_axis < axis:
+        # The mask will be of shape (n_batch, n_features)
+        indices = tf.stack([batch_indices, masked_features], axis=1)
+        mask_shape = [n_batch, n_features]
+    else:
+        # The mask will be of shape (n_features, n_batch)
+        indices = tf.stack([masked_features, batch_indices], axis=1)
+        mask_shape = [n_features, n_batch]
 
-    # Combine batch offsets and feature indices
-    indices = tf.stack([batch_indices, feature_indices], axis=1)  # shape: (total_masks, 2)
-
-    # Create a boolean mask initialized to False. shape: (n_batch, n_features)
+    # Create a boolean mask initialized to False
     mask = tf.tensor_scatter_nd_update(
-        tf.zeros((n_batch, n_features), dtype=tf.bool), indices, tf.ones_like(indices[:, 0], dtype=tf.bool)
+        tf.zeros(mask_shape, dtype=tf.bool),
+        indices,
+        tf.ones(total_masks, dtype=tf.bool),
     )
+
+    # Transpose the mask if necessary to match shape (n_batch, n_features)
+    if batch_axis > axis:
+        mask = tf.transpose(mask)
+
     # Reshape the mask to match the input tensor shape
-    mask_shape = [
-        tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)
-    ]  # shape: (batch, time, feature)
-    mask = tf.reshape(mask, mask_shape)  # shape: (batch, time, feature)
+    mask_shape_full = [tf.shape(x)[i] if i in (batch_axis, axis) else 1 for i in range(ndim)]
+    mask = tf.reshape(mask, mask_shape_full)
 
-    x = tf.where(mask, tf.zeros_like(x), x)
+    # Add assertion that triggers if any element in mask is True when max_number_masks_for_probability_specaug is 0
+    def assert_no_mask():
+        with tf.control_dependencies(
+            [
+                tf.debugging.assert_equal(
+                    tf.reduce_any(mask),
+                    False,
+                    message="Mask should be all zeros when max_number_masks_for_probability_specaug is 0",
+                )
+            ]
+        ):
+            return tf.identity(mask)
 
-    return x
+    # Conditionally apply the assertion based on max_number_masks_for_probability_specaug
+    mask = tf.cond(tf.equal(max_number_masks_for_probability_specaug, 0), assert_no_mask, lambda: mask)
+
+    # Apply the mask to the input tensor
+    x_masked = tf.where(mask, tf.zeros_like(x), x)
+
+    return x_masked
 
 
 def transform(data, network, **config):
     import tensorflow as tf
 
+    conservative_step = 2000
     x = data.placeholder
     step = network.global_train_step
+    increase_flag = tf.where(tf.greater_equal(step, conservative_step), 0, 1)
     current_epoch = tf.cast(step / config["steps_per_epoch"], tf.int32)
     max_time_num_seq_len_divisor = tf.constant(config["max_time_num_seq_len_divisor"], dtype=tf.float32)
     specaug_params = config["specaug_params"]
@@ -213,7 +257,7 @@ def transform(data, network, **config):
 
     # Get filter indices (sorted or unsorted)
     filter_layer = network.layers["features"].subnetwork.layers["conv_h_filter"].output.placeholder
-    num_filters = network.layers["features"].subnetwork.layers["conv_l"].output.shape[-1]
+    num_filters = 5
 
     def get_sorted_indices():
         sorted_filter_indices = sort_filters_by_center_freq(filter_layer)
@@ -243,20 +287,31 @@ def transform(data, network, **config):
         )
         max_time_num_seq_len = tf.cast(
             tf.math.floordiv(
-                tf.cast(tf.shape(x)[data.time_dim_axis], tf.float32),
-                tf.cast(1.0, tf.float32) / max_time_num_seq_len_divisor * tf.cast(time_mask_max_size, tf.float32),
+                tf.cast(tf.shape(x)[data.time_dim_axis], tf.int32),
+                tf.cast(
+                    (tf.cast(1.0, tf.float32) / max_time_num_seq_len_divisor) * tf.cast(time_mask_max_size, tf.float32),
+                    tf.int32,
+                ),
             ),
             tf.int32,
         )
-        # check for the limits
-        actual_time_mask_max_num = tf.minimum(
-            tf.maximum(
-                time_mask_max_num,
-                max_time_num_seq_len,
+        actual_time_mask_max_num = tf.cond(
+            tf.equal(time_mask_max_num, 0),
+            lambda: tf.cast(0, tf.int32),
+            lambda: tf.minimum(
+                tf.maximum(
+                    time_mask_max_num,
+                    max_time_num_seq_len,
+                ),
+                total_time_masks_max_frames // time_mask_max_size,
             ),
-            total_time_masks_max_frames // time_mask_max_size,
         )
-        actual_freq_mask_max_num = tf.minimum(freq_mask_max_num, total_freq_masks_max_size // freq_mask_max_size)
+        # check if freq mask is 0
+        actual_freq_mask_max_num = tf.cond(
+            tf.equal(freq_mask_max_num, 0),
+            lambda: tf.cast(0, tf.int32),
+            lambda: tf.minimum(freq_mask_max_num, total_freq_masks_max_size // freq_mask_max_size),
+        )
 
         enable_logging = tf.convert_to_tensor(config["enable_logging"], dtype=tf.bool)
 
@@ -283,7 +338,7 @@ def transform(data, network, **config):
             batch_axis=data.batch_dim_axis,
             axis=data.time_dim_axis,
             min_num=0,
-            max_num=actual_time_mask_max_num,
+            max_num=actual_time_mask_max_num // (1 + increase_flag),
             max_dims=time_mask_max_size,
             sorted_indices=tf.range(tf.shape(x)[data.time_dim_axis]),
         )
@@ -292,7 +347,7 @@ def transform(data, network, **config):
             batch_axis=data.batch_dim_axis,
             axis=data.feature_dim_axis,
             min_num=0,
-            max_num=actual_freq_mask_max_num,
+            max_num=actual_freq_mask_max_num // (1 + increase_flag),
             max_dims=freq_mask_max_size,
             sorted_indices=sorted_indices,
         )
@@ -305,8 +360,10 @@ def transform(data, network, **config):
 def transform_with_filter_masking(data, network, **config):
     import tensorflow as tf
 
+    conservative_step = 2000
     x = data.placeholder
     step = network.global_train_step
+    increase_flag = tf.where(tf.greater_equal(step, conservative_step), 0, 1)
     current_epoch = tf.cast(step / config["steps_per_epoch"], tf.int32)
     max_time_num_seq_len_divisor = tf.constant(config["max_time_num_seq_len_divisor"], dtype=tf.float32)
     filter_factor = tf.cast(config["filter_factor"], tf.float32)
@@ -319,7 +376,7 @@ def transform_with_filter_masking(data, network, **config):
 
     # Get filter indices (sorted or unsorted)
     filter_layer = network.layers["features"].subnetwork.layers["conv_h_filter"].output.placeholder
-    num_filters = network.layers["features"].subnetwork.layers["conv_l"].output.shape[-1]
+    num_filters = 5
 
     def get_sorted_indices():
         sorted_filter_indices = sort_filters_by_center_freq(filter_layer)
@@ -349,39 +406,64 @@ def transform_with_filter_masking(data, network, **config):
         )
         max_time_num_seq_len = tf.cast(
             tf.math.floordiv(
-                tf.cast(tf.shape(x)[data.time_dim_axis], tf.float32),
-                tf.cast(1.0, tf.float32) / max_time_num_seq_len_divisor * tf.cast(time_mask_max_size, tf.float32),
+                tf.cast(tf.shape(x)[data.time_dim_axis], tf.int32),
+                tf.cast(
+                    (tf.cast(1.0, tf.float32) / max_time_num_seq_len_divisor) * tf.cast(time_mask_max_size, tf.float32),
+                    tf.int32,
+                ),
             ),
             tf.int32,
         )
         # check for the limits
-        actual_time_mask_max_num = tf.minimum(
-            tf.maximum(
-                time_mask_max_num,
-                max_time_num_seq_len,
+        actual_time_mask_max_num = tf.cond(
+            tf.equal(time_mask_max_num, 0),
+            lambda: tf.cast(0, tf.int32),
+            lambda: tf.minimum(
+                tf.maximum(
+                    time_mask_max_num,
+                    max_time_num_seq_len,
+                ),
+                total_time_masks_max_frames // time_mask_max_size,
             ),
-            total_time_masks_max_frames // time_mask_max_size,
         )
-        actual_freq_mask_max_num = tf.minimum(freq_mask_max_num, total_freq_masks_max_size // freq_mask_max_size)
+        # check if freq mask is 0
+        actual_freq_mask_max_num = tf.cond(
+            tf.equal(freq_mask_max_num, 0),
+            lambda: tf.cast(0, tf.int32),
+            lambda: tf.minimum(freq_mask_max_num, total_freq_masks_max_size // freq_mask_max_size),
+        )
 
         if config["filter_based_masking_strategy"] == "variance":
             f_resp = get_frequency_response(filter_layer)
             variance = tf.math.reduce_variance(f_resp, axis=0)
             n_features = tf.shape(x)[data.feature_dim_axis]
-            probs = variance / tf.reduce_sum(variance)
-            uniform_probs = tf.ones_like(probs) / tf.cast(n_features, tf.float32)
-            final_probs = filter_factor * probs + (1 - filter_factor) * uniform_probs
-        elif config["filter_based_masking_strategy"] == "peakToAverage":
+            variance_per_feature = tf.repeat(variance, repeats=num_filters)
+            probs_per_feature = variance_per_feature / tf.reduce_sum(variance_per_feature)
+            uniform_probs = tf.ones_like(probs_per_feature) / tf.cast(n_features, tf.float32)
+            final_probs = filter_factor * probs_per_feature + (1 - filter_factor) * uniform_probs
+        elif config["filter_based_masking_strategy"] == "peakToAverageRatio":
             # Get peak to average ratio for each filter
             f_resp = get_frequency_response(filter_layer)
             peak = tf.reduce_max(f_resp, axis=0)
             average = tf.reduce_mean(f_resp, axis=0)
             ratio = peak / average
             n_features = tf.shape(x)[data.feature_dim_axis]
+            ratio_per_feature = tf.repeat(ratio, repeats=num_filters)  # Shape: (750,)
+            probs_per_feature = ratio_per_feature / tf.reduce_sum(ratio_per_feature)
+            uniform_probs = tf.ones_like(probs_per_feature) / tf.cast(n_features, tf.float32)
+            final_probs = filter_factor * probs_per_feature + (1 - filter_factor) * uniform_probs
+        elif config["filter_based_masking_strategy"] == "peakToAverageDifference":
+            # Get peak to average ratio for each filter
+            f_resp = get_frequency_response(filter_layer)
+            peak = tf.reduce_max(f_resp, axis=0)
+            average = tf.reduce_mean(f_resp, axis=0)
+            ratio = peak - average
+            n_features = tf.shape(x)[data.feature_dim_axis]
             # Normalize the ratio to get probabilities
-            probs = ratio / tf.reduce_sum(ratio)
-            uniform_probs = tf.ones_like(probs) / tf.cast(n_features, tf.float32)
-            final_probs = filter_factor * probs + (1 - filter_factor) * uniform_probs
+            ratio_per_feature = tf.repeat(ratio, repeats=num_filters)  # Shape: (750,)
+            probs_per_feature = ratio_per_feature / tf.reduce_sum(ratio_per_feature)
+            uniform_probs = tf.ones_like(probs_per_feature) / tf.cast(n_features, tf.float32)
+            final_probs = filter_factor * probs_per_feature + (1 - filter_factor) * uniform_probs
 
         enable_logging = tf.convert_to_tensor(config["enable_logging"], dtype=tf.bool)
 
@@ -389,9 +471,19 @@ def transform_with_filter_masking(data, network, **config):
             with tf.control_dependencies(
                 [
                     tf.print(
-                        "Specaug Log: ",
+                        "Specaug Parameters:",
+                        "Epoch:",
                         current_epoch,
-                        tf.shape(x)[data.time_dim_axis],
+                        "Time Mask Num:",
+                        time_mask_max_num,
+                        "Time Mask Size:",
+                        time_mask_max_size,
+                        "Freq Mask Num:",
+                        freq_mask_max_num,
+                        "Freq Mask Size:",
+                        freq_mask_max_size,
+                        "Filter Masks:",
+                        tf.gather(config["specaug_params"]["max_number_masks_for_filter_based_specaug"], current_epoch),
                         sep=", ",
                     )
                 ]
@@ -416,7 +508,7 @@ def transform_with_filter_masking(data, network, **config):
             batch_axis=data.batch_dim_axis,
             axis=data.time_dim_axis,
             min_num=0,
-            max_num=actual_time_mask_max_num,
+            max_num=actual_time_mask_max_num // (1 + increase_flag),
             max_dims=time_mask_max_size,
             sorted_indices=tf.range(tf.shape(x)[data.time_dim_axis]),
         )
@@ -425,7 +517,7 @@ def transform_with_filter_masking(data, network, **config):
             batch_axis=data.batch_dim_axis,
             axis=data.feature_dim_axis,
             min_num=0,
-            max_num=actual_freq_mask_max_num,
+            max_num=actual_freq_mask_max_num // (1 + increase_flag),
             max_dims=freq_mask_max_size,
             sorted_indices=sorted_indices,
         )
